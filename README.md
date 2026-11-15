@@ -1,5 +1,9 @@
 # Token Radar
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/Angga-Nugraha/token-launch-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/Angga-Nugraha/token-launch-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 Every protocol with no token yet, ranked by what its launch would be worth.
 
 DefiLlama's watchlist keeps 40 protocols at or above $50M TVL. This radar keeps them
@@ -59,5 +63,5 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input path/to/snapshot.jso
 ## Entry
 
 Built for the make.fun competition "Build the best token launch radar"
-(token-radar-01). The program runs twice with no network and writes identical
-bytes on both runs.
+(token-radar-01): https://make.fun/bounty/token-radar-01. The program runs twice
+with no network and writes identical bytes on both runs.
