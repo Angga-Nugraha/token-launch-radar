@@ -1,10 +1,12 @@
-// Token Radar radar-2: a static page, no framework and no network. It renders the board from
-// the data this program wrote beside it, and it recomputes every row's implied value from the
-// snapshot figures, so the page, the board and the code agree with each other.
+// Token Radar radar-3: a static page, no framework and no network. It renders the board from
+// the data this program wrote beside it. The model lives in model.js and recomputes every
+// row's implied value, band and farm economics from the snapshot figures, so the page, the
+// board and the code agree with each other.
 'use strict';
 
 const main = document.querySelector('#board');
 const DATA = window.RADAR;
+const M = window.RADAR_MODEL;
 if (!DATA) {
   main.innerHTML = '<div class="empty"><h2>Token Radar: the board is missing</h2><p>data.js was not found beside this page. Run the program to write it, then reload.</p></div>';
   main.setAttribute('aria-busy', 'false');
@@ -105,17 +107,6 @@ function farmSteps(row) {
   ].map(stepText);
 }
 
-/** Implied value from the snapshot figures, recomputed in the page. */
-function impliedValue(row) {
-  const multiple = row.multiple;
-  const growth = row.change_7d === null ? 0 : Math.min(25, Math.max(-25, row.change_7d));
-  const growthMult = 1 + (growth / 100) * DATA.model.growth_weight;
-  const age = row.age_days === null ? DATA.model.unknown_age_days : row.age_days;
-  const maturityMult = DATA.model.maturity_floor + (Math.min(age, DATA.model.maturity_days) / DATA.model.maturity_days) * DATA.model.maturity_range;
-  const chainMult = 1 + DATA.model.chain_bonus * Math.min(Math.max(row.chains.length - 1, 0), DATA.model.chain_bonus_max);
-  return Math.max(1, Math.round(row.tvl_usd * multiple * growthMult * maturityMult * chainMult));
-}
-
 const CATEGORIES = [...new Set(DATA.rows.map((r) => r.category).filter(Boolean))].sort();
 const CHAINS = [...new Set(DATA.rows.flatMap((r) => r.chains))].sort();
 const MAX_IMPLIED = Math.max(...DATA.rows.map((r) => r.implied_value_usd));
@@ -126,6 +117,9 @@ const SORTS = {
   age: { label: 'Age', key: (r) => (r.age_days === null ? -1 : r.age_days), dir: -1 },
   multiple: { label: 'Multiple', key: (r) => r.multiple, dir: -1 },
   implied: { label: 'Implied value', key: (r) => r.implied_value_usd, dir: -1 },
+  slice: { label: 'Airdrop slice', key: (r) => r.farm.slice_usd, dir: -1 },
+  net: { label: 'Net', key: (r) => r.farm.net_usd, dir: -1 },
+  verdict: { label: 'Verdict', key: (r) => ({ FARM: 0, THIN: 1, SKIP: 2 })[r.farm.verdict] ?? 3, dir: 1 },
 };
 const MIN_TVL = [['', 'Any TVL'], ['10000000', '≥ $10M'], ['50000000', '≥ $50M'], ['100000000', '≥ $100M'], ['500000000', '≥ $500M'], ['1000000000', '≥ $1B'], ['5000000000', '≥ $5B']];
 
@@ -177,8 +171,10 @@ function th(label, key) {
 }
 
 function rowHtml(r) {
-  const implied = impliedValue(r);
+  const implied = M.impliedValue(r);
   const mismatch = implied !== r.implied_value_usd;
+  const b = M.band(implied);
+  const v = r.farm.verdict;
   return `<tr data-slug="${esc(r.slug)}" data-selected="${state.slug === r.slug}" class="${r.watchlist ? 'watch' : ''}">
     <td class="num">${r.rank}</td>
     <td><span class="name"><b>${esc(r.name)}</b><span class="sub">${esc(r.category || 'Uncategorized')} · ${esc(chainText(r.chains))} · ${ageText(r.age_days)}</span></span></td>
@@ -186,6 +182,10 @@ function rowHtml(r) {
     <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg'}">${changeText(r.change_7d)}</td>
     <td class="num">${r.multiple.toFixed(2)}×</td>
     <td><span class="implied"><span class="bar"><i style="width:${Math.max(2, Math.round((r.implied_value_usd / MAX_IMPLIED) * 100))}%"></i></span><span class="num">${money(r.implied_value_usd)}</span>${mismatch ? '<span class="neg" title="The page recomputes this value">?</span>' : ''}</span></td>
+    <td class="num">${money(b.p25)}–${money(b.p75)}</td>
+    <td class="num">$${r.farm.slice_usd.toFixed(2)}</td>
+    <td class="num ${r.farm.net_usd >= 0 ? 'pos' : 'neg'}">$${r.farm.net_usd.toFixed(2)}</td>
+    <td><span class="verdict verdict-${v.toLowerCase()}">${v}</span></td>
     <td><span class="badge ${r.watchlist ? 'watch' : ''}">${r.watchlist ? 'Watchlist' : 'Early radar'}</span></td>
   </tr>`;
 }
@@ -200,12 +200,64 @@ function liveHtml(l) {
   </tr>`;
 }
 
+function validRow(label, v) {
+  return `<tr><td>${label}</td><td class="num">${v.median_miss.toFixed(2)}×</td><td class="num">${v.within_2x_pct.toFixed(1)}%</td><td class="num">${v.within_3x_pct.toFixed(1)}%</td><td class="num">${v.spearman.toFixed(2)}</td></tr>`;
+}
+function validTable(set) {
+  return `<table class="calib"><thead><tr><th scope="col">Method</th><th scope="col">Median miss</th><th scope="col">Within 2×</th><th scope="col">Within 3×</th><th scope="col">Spearman</th></tr></thead><tbody>${validRow('Size curve (radar-3)', set.curve)}${validRow('Flat multiple', set.flat_multiple)}${validRow('Category multiple (radar-2)', set.category_multiple)}</tbody></table>`;
+}
+
+/** Log-log scatter: traded protocols in this file, board implied values, fitted curve. */
+function scatterSvg() {
+  const anchorPts = DATA.anchors;
+  const rows = DATA.rows;
+  const W = 720, H = 400, PL = 56, PR = 12, PT = 14, PB = 40;
+  const xs = anchorPts.map((l) => l.tvl_usd).concat(rows.map((r) => r.tvl_usd));
+  const ys = anchorPts.map((l) => l.mcap_usd).concat(rows.map((r) => r.implied_value_usd));
+  const x0 = Math.floor(Math.log10(Math.min(...xs))), x1 = Math.ceil(Math.log10(Math.max(...xs)));
+  const y0 = Math.floor(Math.log10(Math.min(...ys))), y1 = Math.ceil(Math.log10(Math.max(...ys)));
+  const X = (v) => PL + ((Math.log10(v) - x0) / (x1 - x0)) * (W - PL - PR);
+  const Y = (v) => PT + (1 - (Math.log10(v) - y0) / (y1 - y0)) * (H - PT - PB);
+  const tick = (v) => (v >= 1e9 ? `$${v / 1e9}B` : v >= 1e6 ? `$${v / 1e6}M` : `$${v / 1e3}K`);
+  let g = '';
+  for (let e = x0; e <= x1; e++) { const x = X(10 ** e).toFixed(1); g += `<line x1="${x}" y1="${PT}" x2="${x}" y2="${H - PB}" class="grid"/><text x="${x}" y="${H - PB + 18}" class="ax">${tick(10 ** e)}</text>`; }
+  for (let e = y0; e <= y1; e++) { const y = Y(10 ** e).toFixed(1); g += `<line x1="${PL}" y1="${y}" x2="${W - PR}" y2="${y}" class="grid"/><text x="${PL - 6}" y="${(+y + 4).toFixed(1)}" class="ax" text-anchor="end">${tick(10 ** e)}</text>`; }
+  let line = '';
+  for (let lx = x0; lx <= x1; lx += 0.1) line += `${X(10 ** lx).toFixed(1)},${Y(10 ** (DATA.curve.intercept + DATA.curve.slope * lx)).toFixed(1)} `;
+  const dots = rows.map((r) => `<circle cx="${X(r.tvl_usd).toFixed(1)}" cy="${Y(r.implied_value_usd).toFixed(1)}" r="2.2" class="board-dot"/>`).join('');
+  const anchors = anchorPts.map((l) => `<circle cx="${X(l.tvl_usd).toFixed(1)}" cy="${Y(l.mcap_usd).toFixed(1)}" r="3.4" class="anchor-dot"><title>${esc(l.name)}: ${money(l.tvl_usd)} TVL, ${money(l.mcap_usd)} mcap</title></circle>`).join('');
+  return `<svg class="scatter" viewBox="0 0 ${W} ${H}" role="img" aria-label="Scatter plot of market cap against TVL on log scales, with the fitted curve">${g}<polyline points="${line}" class="curve-line"/>${dots}${anchors}<text x="${((W + PL) / 2).toFixed(0)}" y="${H - 6}" class="ax">TVL (log scale)</text><text x="14" y="${((H + PT - PB) / 2).toFixed(0)}" class="ax" text-anchor="middle" transform="rotate(-90 14 ${((H + PT - PB) / 2).toFixed(0)})">Value (log scale)</text></svg>
+  <p class="legend"><span class="lg anchor-dot"></span> Traded anchors (${anchorPts.length}) &nbsp; <span class="lg board-dot"></span> Board implied values (${rows.length}) &nbsp; <span class="lg curve-line"></span> Fitted curve, no family effect</p>`;
+}
+
+function methodHtml() {
+  const c = DATA.curve, v = DATA.validation, m = DATA.model;
+  const loo = v.loo, ts = v.time_split;
+  return `<section class="panel method" aria-label="Method and tests">
+    <h2>Method &amp; tests</h2>
+    <p>The model is a fitted size curve, not a flat multiple. OLS on log10(mcap) against log10(TVL) over ${c.anchors} traded anchors — protocols with a real market cap above zero, excluding exchanges and bridges — plus one shrunk effect per category: the median log-residual of the category's anchors, shrunk toward 0 with pseudo comps, so one comparable never sets an effect on its own.</p>
+    <div class="formula">log10(mcap) = ${c.intercept} + ${c.slope} × log10(TVL) + family effect<br>implied = 10^(curve) × (1 + ${m.growth_weight} × clamp(change_7d, ${m.growth_floor}, ${m.growth_cap}) / 100) × (${m.maturity_floor} + min(age_days, ${m.maturity_days}) / ${m.maturity_days} × ${m.maturity_range})<br>R² = ${c.r_squared}, residual std = ${c.residual_std} (log10), anchors = ${c.anchors}</div>
+    <p>Growth is the 7-day TVL change; maturity rises from ${m.maturity_floor} at listing to 1.00 over ${m.maturity_days} days, and a protocol with no listing date counts as ${m.unknown_age_days} days. There is no chain spread in radar-3: the curve already prices size, and chain count added noise. The P25–P75 band is implied × 10^(±0.6745 × ${c.residual_std}) — the central half of the residual distribution.</p>
+    <h3>Out-of-sample validation — leave-one-out (n = ${loo.n})</h3>
+    ${validTable(loo)}
+    <h3>Out-of-sample validation — time split (${esc(ts.split)}; train ${ts.train_n}, test ${ts.test_n})</h3>
+    ${validTable(ts)}
+    <p class="note">Honest caveat: the curve beats both baselines on miss magnitude on both test sets — leave-one-out median miss ${loo.curve.median_miss}× vs flat ${loo.flat_multiple.median_miss}× and category ${loo.category_multiple.median_miss}×; time-split ${ts.curve.median_miss}× vs ${ts.flat_multiple.median_miss}× and ${ts.category_multiple.median_miss}× — but NOT on rank: leave-one-out Spearman ${loo.curve.spearman} vs flat ${loo.flat_multiple.spearman} and category ${loo.category_multiple.spearman}. The curve prices size better than it ranks, and absolute accuracy is still poor: only ${loo.curve.within_3x_pct}% of leave-one-out predictions land within 3×. The wide P25–P75 bands say the same thing.</p>
+    ${scatterSvg()}
+    <h3>Calibration — family effect by category</h3>
+    <table class="calib"><thead><tr><th scope="col">Category</th><th scope="col">Comparables</th><th scope="col">Median residual</th><th scope="col">Effect</th><th scope="col">Effect multiplier</th></tr></thead>
+    <tbody>${DATA.calibration.map((c2) => `<tr><td>${esc(c2.category)}</td><td class="num">${c2.comparables}</td><td class="num">${c2.median_residual === null ? '—' : c2.median_residual.toFixed(2)}</td><td class="num">${c2.effect.toFixed(2)}</td><td class="num">${c2.effect_multiplier.toFixed(2)}×</td></tr>`).join('')}</tbody></table>
+    <h3>Farm economics — stated assumptions</h3>
+    <p>Every row's farm economics assume a $${DATA.rows[0].farm.ticket_usd.toLocaleString('en-US')} ticket, a launch that airdrops 10% of implied value shared pro-rata by ticket over TVL, 8 transactions over 90 days, and ${DATA.rows[0].farm.hours} hours of work. Fees are 8 × the per-transaction gas of the protocol's first chain. Verdict: FARM when the slice covers the fees twice over, THIN when it merely covers them, else SKIP. ${DATA.rows.filter((r) => r.farm.verdict === 'FARM').length} rows are FARM, ${DATA.rows.filter((r) => r.farm.verdict === 'THIN').length} THIN, ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP').length} SKIP — of the SKIP rows, ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP' && r.farm.fees_usd >= 44).length} carry the highest fee ($${Math.max(...DATA.rows.filter((r) => r.farm.verdict === 'SKIP').map((r) => r.farm.fees_usd)).toFixed(2)}), the Ethereum rate, against a slice of a few dollars.</p>
+  </section>`;
+}
+
 function render() {
   const rows = filteredRows();
   const top = DATA.rows.slice(0, 5);
   const topImplied = DATA.rows[0];
+  const totalImplied = DATA.rows.reduce((s, r) => s + r.implied_value_usd, 0);
   const missed = DATA.rows.filter((r) => !r.watchlist).sort((a, b) => b.tvl_usd - a.tvl_usd)[0];
-  const calib = DATA.calibration;
   main.innerHTML = `<div class="shell">
     <header class="top">
       <div class="brand"><span class="mark" aria-hidden="true"></span><span class="brand-name">Token Radar · ${esc(DATA.model_version)}</span></div>
@@ -222,7 +274,9 @@ function render() {
         <div class="fact"><span>Early radar (outside watchlist)</span><b>${DATA.early_size}</b></div>
         <div class="fact"><span>Already trading, set aside</span><b>${DATA.live_size}</b></div>
         <div class="fact"><span>Highest implied value</span><b>${money(topImplied.implied_value_usd)} · ${esc(topImplied.name)}</b></div>
-        <div class="fact"><span>Market median FDV/TVL</span><b>${DATA.overall_multiple.toFixed(2)}×</b></div>
+        <div class="fact"><span>Total implied value</span><b>${money(totalImplied)}</b></div>
+        <div class="fact"><span>Anchors' median mcap/TVL</span><b>${DATA.overall_multiple.toFixed(2)}×</b></div>
+        <div class="fact"><span>Out-of-sample LOO miss</span><b>${DATA.validation.loo.curve.median_miss.toFixed(2)}× (flat ${DATA.validation.loo.flat_multiple.median_miss.toFixed(2)}×)</b></div>
       </div>
     </section>
     <section class="spot" aria-label="Top five by implied value">
@@ -234,30 +288,29 @@ function render() {
       <div class="field"><label for="chain">Chain</label><select id="chain"><option value="">All chains</option>${CHAINS.map((c) => `<option value="${esc(c)}" ${state.chain === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="field"><label for="minTvl">Minimum TVL</label><select id="minTvl">${MIN_TVL.map(([v, l]) => `<option value="${v}" ${state.minTvl === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <label class="check"><input type="checkbox" id="watch" ${state.watch ? 'checked' : ''}> Watchlist only</label>
-      <div class="tabs" role="group" aria-label="Board or live token view">
+      <div class="tabs" role="group" aria-label="Board, live token or method view">
         <button data-tab="pre" aria-pressed="${state.tab === 'pre'}">Pre-token</button>
         <button data-tab="live" aria-pressed="${state.tab === 'live'}">Live token</button>
+        <button data-tab="method" aria-pressed="${state.tab === 'method'}">Method &amp; tests</button>
       </div>
-      <span class="count" aria-live="polite">${state.tab === 'pre' ? `${rows.length} of ${DATA.board_size} rows` : `${DATA.live.length} live-token protocols`}</span>
+      <span class="count" aria-live="polite">${state.tab === 'pre' ? `${rows.length} of ${DATA.board_size} rows` : state.tab === 'live' ? `${DATA.live.length} live-token protocols` : 'Fitted curve, backtests and calibration'}</span>
     </div>
     ${state.tab === 'pre' ? `<div class="panel"><div class="table-wrap"><table>
       <caption class="sr-only" style="position:absolute;left:-9999px">Pre-token protocols ranked by implied value</caption>
-      <thead><tr>${th('Rank', 'rank')}<th scope="col">Protocol</th>${th('TVL', 'tvl')}${th('7d change', 'change')}${th('Multiple', 'multiple')}${th('Implied value', 'implied')}<th scope="col">Status</th></tr></thead>
-      <tbody>${rows.length ? rows.map(rowHtml).join('') : `<tr><td colspan="7"><div class="empty"><h2>Nothing matches</h2><p>No protocol fits these filters. Clear the search or widen the filters.</p><button class="button" data-clear="1">Clear filters</button></div></td></tr>`}</tbody>
-    </table></div></div>` : `<div class="panel"><div class="table-wrap"><table>
+      <thead><tr>${th('Rank', 'rank')}<th scope="col">Protocol</th>${th('TVL', 'tvl')}${th('7d change', 'change')}${th('Multiple', 'multiple')}${th('Implied value', 'implied')}<th scope="col">P25–P75</th>${th('Slice', 'slice')}${th('Net', 'net')}${th('Verdict', 'verdict')}<th scope="col">Status</th></tr></thead>
+      <tbody>${rows.length ? rows.map(rowHtml).join('') : `<tr><td colspan="11"><div class="empty"><h2>Nothing matches</h2><p>No protocol fits these filters. Clear the search or widen the filters.</p><button class="button" data-clear="1">Clear filters</button></div></td></tr>`}</tbody>
+    </table></div></div>` : state.tab === 'live' ? `<div class="panel"><div class="table-wrap"><table>
       <caption class="sr-only" style="position:absolute;left:-9999px">Live-token protocols by market cap</caption>
       <thead><tr><th scope="col">Protocol</th><th scope="col">TVL</th><th scope="col">7d change</th><th scope="col">Market cap</th><th scope="col">FDV/TVL</th></tr></thead>
       <tbody>${DATA.live.map(liveHtml).join('')}</tbody>
     </table></div></div>
-    <p class="note" style="margin-top:12px">These ${DATA.live.length} protocols already trade, so the board shows the market's own value for them instead of a model's. They are the comparables that set each category's multiple.</p>`}
-    <section class="panel model" aria-label="How the model works">
+    <p class="note" style="margin-top:12px">These ${DATA.live.length} protocols already trade, so the board shows the market's own value for them instead of a model's. The curve is fitted on the traded anchors, not on these rows alone.</p>` : methodHtml()}
+    ${state.tab === 'method' ? '' : `<section class="panel model" aria-label="How the model works">
       <h2>How the implied value is built</h2>
-      <p>Implied value = TVL × category multiple × growth × maturity × chain spread. The category multiple is the median market-cap-per-TVL of the snapshot's own token-bearing protocols in that category, shrunk toward the whole-market median (${DATA.overall_multiple.toFixed(2)}×) where the category has few comparables, and clamped to [0.05, 2]. Growth is the 7-day TVL change, clamped to ±25% and weighted by ${DATA.model.growth_weight}. Maturity rises from ${DATA.model.maturity_floor} at listing to 1.00 over ${DATA.model.maturity_days} days; a protocol with no listing date is given ${DATA.model.unknown_age_days} days. Each extra chain adds ${DATA.model.chain_bonus * 100}% (at most ${DATA.model.chain_bonus_max} chains). No protocol name is special-cased: the same function scores every row.</p>
-      <div class="formula">implied = tvl_usd × multiple × (1 + clamp(change_7d, -25, +25) / 100 × 0.5)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;× (0.7 + min(age_days, 1095) / 1095 × 0.3) × (1 + 0.02 × min(chains - 1, 4))</div>
-      <table class="calib"><caption class="sr-only">Category multiples</caption><thead><tr><th scope="col">Category</th><th scope="col">Comparables</th><th scope="col">Median FDV/TVL</th><th scope="col">Multiple used</th></tr></thead>
-      <tbody>${calib.map((c) => `<tr><td>${esc(c.category)}</td><td class="num">${c.comparables}</td><td class="num">${c.median_multiple === null ? '—' : `${c.median_multiple.toFixed(2)}×`}</td><td class="num">${c.multiple.toFixed(2)}×</td></tr>`).join('')}</tbody></table>
-      <p class="note">A multiple above 1 means the category's tokens trade above their TVL; a multiple below 0.2 means they trade thinly. The board is a radar, not a promise: implied value is a model's estimate of what a launch could be worth, not a price, and a launch may never happen.</p>
-    </section>
+      <p>A fitted size curve, not a flat multiple: log10(mcap) = ${DATA.curve.intercept} + ${DATA.curve.slope} × log10(TVL), fitted by OLS on ${DATA.curve.anchors} traded anchors, plus a shrunk category effect — then growth (7-day TVL change, clamped ${DATA.model.growth_floor}% to +${DATA.model.growth_cap}%, weighted ${DATA.model.growth_weight}) and maturity (from ${DATA.model.maturity_floor} at listing to 1.00 over ${DATA.model.maturity_days} days; no listing date counts as ${DATA.model.unknown_age_days} days). No chain spread: the curve already prices size. The full formula, the out-of-sample backtests, the calibration table and the scatter plot are in the <b>Method &amp; tests</b> tab.</p>
+      <div class="formula">implied = 10^(${DATA.curve.intercept} + ${DATA.curve.slope} × log10(tvl_usd) + family effect)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;× (1 + ${DATA.model.growth_weight} × clamp(change_7d, ${DATA.model.growth_floor}, ${DATA.model.growth_cap}) / 100) × (${DATA.model.maturity_floor} + min(age_days, ${DATA.model.maturity_days}) / ${DATA.model.maturity_days} × ${DATA.model.maturity_range})</div>
+      <p class="note">The board is a radar, not a promise: the median out-of-sample miss is ${DATA.validation.loo.curve.median_miss}× leave-one-out, so read every implied value with its P25–P75 band. A launch may never happen.</p>
+    </section>`}
     <footer class="foot"><span>Source: ${esc(DATA.source)}, as of ${esc(DATA.as_of)}. Model ${esc(DATA.model_version)}.</span><span>“No token” means the snapshot records none for the protocol. Wrapping, staking and bridging products are excluded, so a wrapped or staked version of a token that trades never ranks as a launch.</span></footer>
   </div>
   <dialog class="detail" id="detail" aria-label="Protocol detail"></dialog>`;
@@ -273,10 +326,10 @@ function renderDetail() {
     if (dlg.open) dlg.close();
     return;
   }
-  const growth = row.change_7d === null ? 0 : Math.min(25, Math.max(-25, row.change_7d));
   const age = row.age_days === null ? DATA.model.unknown_age_days : row.age_days;
-  const maturityMult = DATA.model.maturity_floor + (Math.min(age, DATA.model.maturity_days) / DATA.model.maturity_days) * DATA.model.maturity_range;
-  const chainMult = 1 + DATA.model.chain_bonus * Math.min(Math.max(row.chains.length - 1, 0), DATA.model.chain_bonus_max);
+  const implied = M.impliedValue(row);
+  const ev = M.farmEV(row, implied);
+  const b = M.band(implied);
   const calib = DATA.calibration.find((c) => c.category === (row.category || 'Other'));
   const comps = DATA.live.filter((l) => l.category === row.category).slice(0, 5);
   const steps = farmSteps(row);
@@ -284,14 +337,24 @@ function renderDetail() {
   <section class="detail-section"><h3>Why it ranks #${row.rank}</h3>
     <div class="equation">
       <div><span>TVL</span><b>${moneyExact(row.tvl_usd)}</b></div>
-      <div><span>Category multiple (${esc(row.category || 'Other')})</span><b>${row.multiple.toFixed(2)}×</b></div>
+      <div><span>Fitted curve at this TVL (${row.multiple.toFixed(2)}×, incl. family effect ×${(10 ** row.family_effect).toFixed(2)})</span><b>${moneyExact(Math.round(row.tvl_usd * row.multiple))}</b></div>
       <div><span>Growth (7d ${changeText(row.change_7d)})</span><b>× ${row.growth_multiplier.toFixed(3)}</b></div>
-      <div><span>Maturity (${ageText(row.age_days)})</span><b>× ${maturityMult.toFixed(3)}</b></div>
-      <div><span>Chain spread (${row.chains.length} chain${row.chains.length === 1 ? '' : 's'})</span><b>× ${chainMult.toFixed(3)}</b></div>
+      <div><span>Maturity (${ageText(row.age_days)})</span><b>× ${row.maturity_multiplier.toFixed(3)}</b></div>
+      <div><span>Chain spread (${row.chains.length} chain${row.chains.length === 1 ? '' : 's'}, none in radar-3)</span><b>× ${row.chain_multiplier.toFixed(3)}</b></div>
       <div class="total"><span>Implied value</span><b>${moneyExact(row.implied_value_usd)}</b></div>
+      <div><span>P25–P75 band</span><b>${moneyExact(b.p25)} – ${moneyExact(b.p75)}</b></div>
     </div>
-    <p>${esc(row.name)} ranks #${row.rank} because it holds ${money(row.tvl_usd)} of TVL in ${esc(row.category || 'an uncategorized')} category, whose tokens trade at ${row.multiple.toFixed(2)}× TVL, and it has been live ${ageText(row.age_days)}. Its 7-day change is ${changeText(row.change_7d)}. The implied value is a model's estimate, not a price, and the launch may never happen.</p>
-    ${calib ? `<p>Category multiple: ${calib.comparables} comparable${calib.comparables === 1 ? '' : 's'} in ${esc(calib.category)}, median FDV/TVL ${calib.median_multiple === null ? '—' : `${calib.median_multiple.toFixed(2)}×`}, shrunk toward the market median ${DATA.overall_multiple.toFixed(2)}×.</p>` : ''}
+    <p>${esc(row.name)} ranks #${row.rank} because it holds ${money(row.tvl_usd)} of TVL in ${esc(row.category || 'an uncategorized')} category, whose fitted curve value at this TVL is ${row.multiple.toFixed(2)}× TVL, and it has been live ${ageText(row.age_days)}. Its 7-day change is ${changeText(row.change_7d)}. The implied value is a model's estimate, not a price, and the launch may never happen.</p>
+    ${calib ? `<p>Family effect for ${esc(calib.category)}: ${calib.comparables} comparable${calib.comparables === 1 ? '' : 's'}, median log-residual ${calib.median_residual === null ? '—' : calib.median_residual.toFixed(2)}, shrunk effect ${calib.effect.toFixed(2)} (×${calib.effect_multiplier.toFixed(2)}), shrunk toward 0 where comparables are few.</p>` : ''}
+  </section>
+  <section class="detail-section"><h3>Farm economics — $${ev.ticket_usd.toLocaleString('en-US')} ticket</h3>
+    <div class="equation">
+      <div><span>Airdrop slice (10% of implied, pro-rata)</span><b>$${ev.slice_usd.toFixed(2)}</b></div>
+      <div><span>Fees (8 transactions over 90 days)</span><b>$${ev.fees_usd.toFixed(2)}</b></div>
+      <div><span>Time</span><b>${ev.hours} hours</b></div>
+      <div class="total"><span>Net</span><b>$${ev.net_usd.toFixed(2)} · ${ev.verdict}</b></div>
+    </div>
+    <p>Verdict: FARM when the slice covers the fees twice over, THIN when it merely covers them, else SKIP. The slice assumes a launch airdrops 10% of implied value, shared pro-rata by ticket over TVL.</p>
   </section>
   ${comps.length ? `<section class="detail-section"><h3>Comparable tokens in ${esc(row.category || 'this category')}</h3><div class="comps">${comps.map((c) => `<div class="comp"><span>${esc(c.name)}</span><b class="num">${c.fdv_tvl === null ? '—' : `${c.fdv_tvl.toFixed(2)}×`} FDV/TVL · ${money(c.tvl_usd)} TVL</b></div>`).join('')}</div></section>` : ''}
   <section class="detail-section"><h3>Farm plan</h3>

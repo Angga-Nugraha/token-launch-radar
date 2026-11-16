@@ -1,4 +1,4 @@
-// Token Radar model radar-2: one snapshot of the protocol universe in, one ranked board out.
+// Token Radar model radar-3: one snapshot of the protocol universe in, one ranked board out.
 //
 // The board ranks every pre-token protocol the snapshot's own watchlist rule would keep: no token
 // recorded, and not a wrapped, staked or bridged product of a token that already trades. The
@@ -6,22 +6,39 @@
 // that passes the same rule below the floor (158 more here), because the radar exists to find the
 // early ones. A protocol that records no token is said to record none, never that it has none.
 //
-// Implied value is computed at run time from the snapshot's own figures, never from a hand-kept
-// list of names:
+// Implied value is a fitted size curve, not a flat multiple. A flat median mcap/TVL multiple
+// prices a $2.8B-TVL protocol as if it were a small one; traded tokens do not scale that way.
+// radar-3 fits, on the snapshot's own traded anchors, by ordinary least squares:
 //
-//   multiple   = the category's FDV/TVL multiple, calibrated from the snapshot's token-bearing
-//                protocols in the same category (median market-cap-per-TVL), shrunk toward the
-//                whole-market median where the category has few comparables, clamped to [0.05, 2]
-//   growth     = clamp(change_7d, -25, +25) per cent
-//   growthMult = 1 + (growth / 100) x 0.5
-//   maturity   = 0.7 + min(age_days, 1095) / 1095 x 0.3   (age unknown: 365 days)
-//   chainMult  = 1 + 0.02 x min(chains - 1, 4)
-//   implied    = max(1, round(tvl_usd x multiple x growthMult x maturity x chainMult))
+//   log10(mcap) = a + b * log10(TVL)          (anchors: mcap_usd > 0, tvl_usd > 0,
+//                                              excluding CEX, Bridge and Canonical Bridge —
+//                                              an exchange or a bridge is not a launch comp)
+//   curve       = 10^(a + b * log10(TVL)) * 10^(family effect)
+//   family effect = median log-residual of the protocol's category, shrunk toward 0 with
+//                   4 pseudo comps: effect * n / (n + 4). Categories with no anchors get 0.
+//   multiple    = curve / TVL                  (the fitted curve value at this TVL, per TVL;
+//                                              the only multiple the model publishes, so the
+//                                              dashboard can still recompute TVL x multiple x ...)
+//   growth      = 1 + 0.75 * clamp(change_7d, -40, +60) / 100
+//   age         = 0.55 + 0.45 * min(age_days, 730) / 730   (age unknown: 365 days)
+//   implied     = max(1, round(curve * growth * age))
+//               = max(1, round(TVL * multiple * growth * age))
 //
-// A category whose tokens trade richly against TVL (curators, derivatives) earns a higher multiple
-// than one whose tokens trade thinly (lending, liquid staking). The dashboard shows the calibration
-// table, so the judge can see every multiple's comparables. No protocol name is ever special-cased:
-// the same function scores every row.
+// The curve is validated out of sample at build time (see validate()): leave-one-out over the
+// anchors, and a time split (fit before 2025-01-01, test on listings from 2025 on), each against
+// two baselines on the same test sets — a flat overall median multiple, and a flat category
+// multiple (the radar-2 rule). The numbers are embedded in data.js, not hand-typed.
+//
+// Uncertainty: the P25–P75 band is implied * 10^(+/-0.6745 * residual_std) — the central half of
+// a log-normal residual distribution with the fitted residual dispersion.
+//
+// Farm economics: a $1,000 ticket buys a pro-rata slice of a 10% airdrop,
+// slice = implied * 0.10 * (1000 / TVL); fees are 8 transactions over 90 days at the first
+// chain's per-transaction gas; hours are 2.5 of work. net = slice - fees. Verdict: FARM when
+// net > 0 and slice >= 2 * fees, THIN when net > 0, else SKIP. All assumptions are stated on
+// the page; the farm plan steps themselves are unchanged from radar-2.
+//
+// No protocol name is ever special-cased: the same function scores every row.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -62,30 +79,53 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  growth_weight: 0.5,
-  growth_floor: -25,
-  growth_cap: 25,
-  maturity_floor: 0.7,
-  maturity_range: 0.3,
-  maturity_days: 1095,
+  growth_weight: 0.75,
+  growth_floor: -40,
+  growth_cap: 60,
+  maturity_floor: 0.55,
+  maturity_range: 0.45,
+  maturity_days: 730,
   unknown_age_days: 365,
-  multiple_floor: 0.05,
-  multiple_cap: 2.0,
-  chain_bonus: 0.02,
+  // The multiple is the fitted curve value at the protocol's TVL, not a calibrated ratio:
+  // these bounds only guard against a degenerate fit and never bind in practice.
+  multiple_floor: 0.0001,
+  multiple_cap: 1000,
+  // No chain spread in radar-3: the curve already prices size, and chain count added noise.
+  chain_bonus: 0,
   chain_bonus_max: 4,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
+
+/** Pseudo comps shrinking each category's family effect toward 0. */
+export const EFFECT_PSEUDO_COUNT = 4;
+
+/** The farm ticket, the transactions it takes, and the hours it takes (stated assumptions). */
+export const FARM_TICKET_USD = 1000;
+export const FARM_TX_COUNT = 8;
+export const FARM_HOURS = 2.5;
+/** The share of implied value a launch airdrops, in the farm slice. */
+export const FARM_AIRDROP_SHARE = 0.1;
 
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
   text: string;
   cost: string;
   time: string;
+}
+
+/** One row's farm economics: the expected slice of a 10% airdrop, net of all fees. */
+export interface FarmEconomics {
+  ticket_usd: number;
+  slice_usd: number;
+  fees_usd: number;
+  hours: number;
+  net_usd: number;
+  verdict: 'FARM' | 'THIN' | 'SKIP';
 }
 
 /** One row of board.json: the ranked board's row. */
@@ -105,6 +145,8 @@ export interface BoardRow {
   watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
+  p25_usd: number;
+  p75_usd: number;
   model: {
     multiple: number;
     multiple_n: number;
@@ -112,8 +154,10 @@ export interface BoardRow {
     growth_multiplier: number;
     maturity_multiplier: number;
     chain_multiplier: number;
+    family_effect: number;
     age_days: number | null;
   };
+  farm: FarmEconomics;
   farm_steps: string[];
 }
 
@@ -130,10 +174,14 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  p25_usd: number;
+  p75_usd: number;
   multiple: number;
+  family_effect: number;
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  farm: FarmEconomics;
   watchlist: boolean;
 }
 
@@ -149,12 +197,54 @@ export interface LiveRow {
   fdv_tvl: number | null;
 }
 
-/** One category's calibration: how its multiple was derived from the snapshot. */
+/** One category's calibration: its shrunk family effect on the log-log curve. */
 export interface CalibrationRow {
   category: string;
   comparables: number;
-  median_multiple: number | null;
-  multiple: number;
+  median_residual: number | null;
+  effect: number;
+  effect_multiplier: number;
+}
+
+/** The fitted log-log size curve and its per-category effects. */
+export interface CurveFit {
+  anchors: number;
+  intercept: number;
+  slope: number;
+  residual_std: number;
+  r_squared: number;
+  effects: Map<string, { n: number; median_residual: number; effect: number }>;
+}
+
+/** One validation method's scores: median miss ratio, share within 2x/3x, rank correlation. */
+export interface ValidationMetrics {
+  n: number;
+  median_miss: number;
+  within_2x_pct: number;
+  within_3x_pct: number;
+  spearman: number;
+}
+
+/** Curve vs baselines on one test set. */
+export interface ValidationComparison {
+  curve: ValidationMetrics;
+  flat_multiple: ValidationMetrics;
+  category_multiple: ValidationMetrics;
+}
+
+/** Out-of-sample validation, computed at build time from the snapshot alone. */
+export interface Validation {
+  anchors: number;
+  loo: { n: number } & ValidationComparison;
+  time_split: { split: string; train_n: number; test_n: number } & ValidationComparison;
+}
+
+/** One traded anchor, plotted on the scatter: the protocol's TVL and market cap. */
+export interface AnchorPoint {
+  slug: string;
+  name: string;
+  tvl_usd: number;
+  mcap_usd: number;
 }
 
 /** Everything the dashboard needs: the board, the live set, the calibration, and the model. */
@@ -170,8 +260,11 @@ export interface RadarData {
   live_size: number;
   calibration: CalibrationRow[];
   overall_multiple: number;
+  curve: { anchors: number; intercept: number; slope: number; residual_std: number; r_squared: number };
+  validation: Validation;
   rows: RadarRow[];
   live: LiveRow[];
+  anchors: AnchorPoint[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -186,6 +279,9 @@ const DAY_MS = 86_400_000;
 
 /** Round to 4 decimals: the multiple the model publishes is the multiple it scores with. */
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+
+/** Round to 2 decimals: money in the farm economics. */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /** A finite number, else `fallback`. */
 function finite(value: unknown, fallback: number): number {
@@ -209,42 +305,82 @@ function median(sorted: number[]): number {
   return n % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/** The calibration: one FDV/TVL multiple per category, from the snapshot's token-bearing rows. */
+/** Categories that are not launch comps: an exchange or a bridge is not a pre-token launch. */
+const ANCHOR_EXCLUDED_CATEGORIES = new Set(['CEX', 'Bridge', 'Canonical Bridge']);
+
+/**
+ * The traded anchors the curve is fitted on: protocols with a real traded market cap
+ * (mcap_usd > 0 — the snapshot records 0 and even -1 for dead listings) and a positive TVL,
+ * excluding CEX and bridges. In this snapshot that is 105 protocols.
+ */
+export function tradedAnchors(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter(
+    (p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 && !ANCHOR_EXCLUDED_CATEGORIES.has(p.category ?? ''),
+  );
+}
+
+/** Fit log10(mcap) = a + b*log10(TVL) by OLS on `list`, with shrunk category effects. */
+export function fitCurve(list: SnapshotProtocol[]): CurveFit {
+  const xs = list.map((p) => Math.log10(p.tvl_usd));
+  const ys = list.map((p) => Math.log10(p.mcap_usd!));
+  const n = list.length;
+  const meanX = xs.reduce((s, x) => s + x, 0) / n;
+  const meanY = ys.reduce((s, y) => s + y, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  for (let i = 0; i < n; i++) {
+    sxx += (xs[i]! - meanX) ** 2;
+    sxy += (xs[i]! - meanX) * (ys[i]! - meanY);
+  }
+  const slope = sxx === 0 ? 0 : sxy / sxx;
+  const intercept = meanY - slope * meanX;
+  const residuals = ys.map((y, i) => y - (intercept + slope * xs[i]!));
+  const ssr = residuals.reduce((s, r) => s + r * r, 0);
+  const sst = ys.reduce((s, y) => s + (y - meanY) ** 2, 0);
+  const residualStd = n > 2 ? Math.sqrt(ssr / (n - 2)) : 0;
+  const rSquared = sst === 0 ? 0 : 1 - ssr / sst;
+  // Category effect: the median log-residual of the category's anchors, shrunk toward 0 with
+  // EFFECT_PSEUDO_COUNT pseudo comps, so one comparable never sets an effect on its own.
+  const byCat = new Map<string, number[]>();
+  list.forEach((p, i) => {
+    const key = p.category ?? 'Other';
+    const rs = byCat.get(key) ?? [];
+    rs.push(residuals[i]!);
+    byCat.set(key, rs);
+  });
+  const effects = new Map<string, { n: number; median_residual: number; effect: number }>();
+  for (const [cat, rs] of byCat) {
+    const med = median(rs.slice().sort((a, b) => a - b));
+    effects.set(cat, { n: rs.length, median_residual: med, effect: med * (rs.length / (rs.length + EFFECT_PSEUDO_COUNT)) });
+  }
+  return { anchors: n, intercept, slope, residual_std: residualStd, r_squared: rSquared, effects };
+}
+
+/** The curve's market-cap prediction for a protocol (before growth and age). */
+function curveValue(fit: CurveFit, p: SnapshotProtocol): number {
+  const logTvl = p.tvl_usd > 0 ? Math.log10(p.tvl_usd) : 0;
+  const effect = fit.effects.get(p.category ?? 'Other')?.effect ?? 0;
+  return 10 ** (fit.intercept + fit.slope * logTvl + effect);
+}
+
+/** The calibration: the fitted curve, its category effects, and the anchors' median multiple. */
 export interface Calibration {
   overall: number;
-  byCategory: Map<string, { n: number; median: number | null; multiple: number }>;
+  curve: CurveFit;
+  byCategory: Map<string, { n: number; median_residual: number | null; effect: number }>;
 }
 
 export function calibrate(snapshot: Snapshot): Calibration {
-  const all: number[] = [];
-  const byCat = new Map<string, number[]>();
-  for (const p of snapshot.protocols) {
-    if (p.mcap_usd !== null && p.tvl_usd > 0) {
-      const r = p.mcap_usd / p.tvl_usd;
-      if (Number.isFinite(r) && r > 0) {
-        all.push(r);
-        const key = p.category ?? 'Other';
-        const list = byCat.get(key) ?? [];
-        list.push(r);
-        byCat.set(key, list);
-      }
-    }
+  const anchors = tradedAnchors(snapshot);
+  const curve = fitCurve(anchors);
+  const multiples = anchors.map((p) => p.mcap_usd! / p.tvl_usd).sort((a, b) => a - b);
+  const overall = multiples.length > 0 ? median(multiples) : 0.2;
+  const byCategory = new Map<string, { n: number; median_residual: number | null; effect: number }>();
+  for (const cat of new Set(snapshot.protocols.map((p) => p.category ?? 'Other'))) {
+    const e = curve.effects.get(cat);
+    byCategory.set(cat, e === undefined ? { n: 0, median_residual: null, effect: 0 } : { n: e.n, median_residual: e.median_residual, effect: e.effect });
   }
-  all.sort((a, b) => a - b);
-  const overall = all.length > 0 ? median(all) : 0.2;
-  const byCategory = new Map<string, { n: number; median: number | null; multiple: number }>();
-  const cats = new Set(snapshot.protocols.map((p) => p.category ?? 'Other'));
-  for (const cat of cats) {
-    const rs = (byCat.get(cat) ?? []).slice().sort((a, b) => a - b);
-    const med = rs.length > 0 ? median(rs) : null;
-    // Shrink toward the market median where the category has few comparables: a single
-    // comparable never sets the multiple on its own.
-    const w = rs.length >= 5 ? 1 : rs.length >= 3 ? 0.6 : rs.length >= 1 ? 0.4 : 0;
-    const raw = med === null ? overall : w * med + (1 - w) * overall;
-    const multiple = round4(Math.min(MODEL.multiple_cap, Math.max(MODEL.multiple_floor, raw)));
-    byCategory.set(cat, { n: rs.length, median: med, multiple });
-  }
-  return { overall, byCategory };
+  return { overall, curve, byCategory };
 }
 
 /** The multipliers and the implied value one protocol gets under the model. */
@@ -253,11 +389,15 @@ export function impliedValue(
   asOf: string,
   cal: Calibration,
   model: ModelConstants = MODEL,
-): { implied: number; multiple: number; multipleN: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; age: number | null } {
+): { implied: number; multiple: number; multipleN: number; growthPct: number; growthMult: number; maturityMult: number; chainMult: number; familyEffect: number; p25: number; p75: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const entry = cal.byCategory.get(protocol.category ?? 'Other');
-  const multiple = entry !== undefined ? entry.multiple : cal.overall;
   const multipleN = entry !== undefined ? entry.n : 0;
+  const familyEffect = entry !== undefined ? entry.effect : 0;
+  // The multiple is the fitted curve value at this TVL, per TVL — rounded to 4 decimals, and
+  // the model scores with the rounded value, so the dashboard's recompute agrees exactly.
+  const rawMultiple = protocol.tvl_usd > 0 ? curveValue(cal.curve, protocol) / protocol.tvl_usd : 0;
+  const multiple = round4(Math.min(model.multiple_cap, Math.max(model.multiple_floor, rawMultiple)));
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
@@ -265,7 +405,35 @@ export function impliedValue(
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const chainMult = 1 + model.chain_bonus * Math.min(Math.max(protocol.chains.length - 1, 0), model.chain_bonus_max);
   const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * maturityMult * chainMult));
-  return { implied, multiple, multipleN, growthPct, growthMult, maturityMult, chainMult, age };
+  // P25–P75 band: the central half of a log-normal residual distribution, 0.6745 sigma each way.
+  const band = 10 ** (0.6745 * cal.curve.residual_std);
+  const p25 = Math.max(1, Math.round(implied / band));
+  const p75 = Math.max(1, Math.round(implied * band));
+  return { implied, multiple, multipleN, growthPct, growthMult, maturityMult, chainMult, familyEffect, p25, p75, age };
+}
+
+/** What one transaction costs on a chain, in dollars: the midpoint of the gasFor band. */
+export function gasUsd(chain: string): number {
+  if (chain === 'Ethereum') return 5.5;
+  if (chain === 'Solana') return 0.025;
+  if (chain === 'Bitcoin') return 3;
+  if (chain === 'Tron') return 2;
+  if (['Arbitrum', 'Optimism', 'Base', 'Ink', 'Blast', 'Mode', 'Zora', 'Unichain', 'World Chain', 'Scroll', 'Linea', 'Polygon zkEVM', 'Mantle', 'Manta', 'Fraxtal', 'Abstract', 'Soneium', 'Berachain'].includes(chain)) return 0.15;
+  if (['Binance', 'Avalanche', 'Polygon', 'Gnosis', 'Fantom', 'Celo', 'Kava', 'Sei', 'Sui', 'Aptos', 'Near', 'Starknet', 'zkSync Era'].includes(chain)) return 0.25;
+  return 0.5;
+}
+
+/**
+ * The farm economics for one row: a $1,000 ticket's pro-rata slice of a 10% airdrop,
+ * net of 8 transactions of gas on the protocol's first chain over 90 days and 2.5 hours
+ * of work. FARM when the slice covers the fees twice over, THIN when it merely covers them.
+ */
+export function farmEconomics(p: SnapshotProtocol, implied: number): FarmEconomics {
+  const slice = p.tvl_usd > 0 ? round2(implied * FARM_AIRDROP_SHARE * (FARM_TICKET_USD / p.tvl_usd)) : 0;
+  const fees = round2(FARM_TX_COUNT * gasUsd(p.chains.length > 0 ? p.chains[0]! : ''));
+  const net = round2(slice - fees);
+  const verdict: FarmEconomics['verdict'] = net > 0 && slice >= 2 * fees ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
+  return { ticket_usd: FARM_TICKET_USD, slice_usd: slice, fees_usd: fees, hours: FARM_HOURS, net_usd: net, verdict };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -339,6 +507,8 @@ export function buildBoard(snapshot: Snapshot, cal: Calibration = calibrate(snap
     watchlist: watch.has(s.p.slug),
     age_days: s.v.age,
     implied_value_usd: s.v.implied,
+    p25_usd: s.v.p25,
+    p75_usd: s.v.p75,
     model: {
       multiple: round4(s.v.multiple),
       multiple_n: s.v.multipleN,
@@ -346,8 +516,10 @@ export function buildBoard(snapshot: Snapshot, cal: Calibration = calibrate(snap
       growth_multiplier: round4(s.v.growthMult),
       maturity_multiplier: round4(s.v.maturityMult),
       chain_multiplier: round4(s.v.chainMult),
+      family_effect: round4(s.v.familyEffect),
       age_days: s.v.age,
     },
+    farm: farmEconomics(s.p, s.v.implied),
     farm_steps: farmSteps(s.p, s.v.age).map(stepText),
   }));
 }
@@ -501,11 +673,143 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    p25_usd: row.p25_usd,
+    p75_usd: row.p75_usd,
     multiple: row.model.multiple,
+    family_effect: row.model.family_effect,
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    farm: row.farm,
     watchlist: row.watchlist,
+  };
+}
+
+/** Ranks with ties averaged, for the Spearman correlation. */
+function ranks(values: number[]): number[] {
+  const order = values.map((v, i) => [v, i] as const).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const r = new Array<number>(values.length);
+  let i = 0;
+  while (i < order.length) {
+    let j = i;
+    while (j + 1 < order.length && order[j + 1]![0] === order[i]![0]) j++;
+    const avg = (i + j) / 2 + 1;
+    for (let k = i; k <= j; k++) r[order[k]![1]] = avg;
+    i = j + 1;
+  }
+  return r;
+}
+
+/** Pearson correlation of two equal-length series. */
+function pearson(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 2) return 0;
+  const mx = xs.reduce((s, x) => s + x, 0) / n;
+  const my = ys.reduce((s, y) => s + y, 0) / n;
+  let sxy = 0;
+  let sxx = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i++) {
+    sxy += (xs[i]! - mx) * (ys[i]! - my);
+    sxx += (xs[i]! - mx) ** 2;
+    syy += (ys[i]! - my) ** 2;
+  }
+  return sxx === 0 || syy === 0 ? 0 : sxy / Math.sqrt(sxx * syy);
+}
+
+/** One method's out-of-sample scores on a test set. */
+function validationMetrics(actual: number[], predicted: number[]): ValidationMetrics {
+  const misses = actual.map((a, i) => Math.max(predicted[i]!, a) / Math.min(predicted[i]!, a)).sort((a, b) => a - b);
+  const within = (x: number): number => misses.filter((m) => m <= x).length;
+  return {
+    n: actual.length,
+    median_miss: round2(median(misses)),
+    within_2x_pct: actual.length === 0 ? 0 : round2((within(2) / actual.length) * 100),
+    within_3x_pct: actual.length === 0 ? 0 : round2((within(3) / actual.length) * 100),
+    spearman: round2(pearson(ranks(predicted), ranks(actual))),
+  };
+}
+
+/** The flat overall median multiple, fitted on `train`, applied to `test`. */
+function flatMultiplePredictions(train: SnapshotProtocol[], test: SnapshotProtocol[]): number[] {
+  const ms = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((a, b) => a - b);
+  const med = median(ms);
+  return test.map((p) => p.tvl_usd * med);
+}
+
+/**
+ * The radar-2 baseline: a flat category multiple, the category median shrunk toward the
+ * overall median (full weight at 5+ comps, 0.6 at 3+, 0.4 at 1+, none below), clamped [0.05, 2].
+ */
+function categoryMultiplePredictions(train: SnapshotProtocol[], test: SnapshotProtocol[]): number[] {
+  const all = train.map((p) => p.mcap_usd! / p.tvl_usd).sort((a, b) => a - b);
+  const overall = median(all);
+  const byCat = new Map<string, number[]>();
+  for (const p of train) {
+    const key = p.category ?? 'Other';
+    const list = byCat.get(key) ?? [];
+    list.push(p.mcap_usd! / p.tvl_usd);
+    byCat.set(key, list);
+  }
+  return test.map((p) => {
+    const rs = (byCat.get(p.category ?? 'Other') ?? []).slice().sort((a, b) => a - b);
+    const med = rs.length > 0 ? median(rs) : null;
+    const w = rs.length >= 5 ? 1 : rs.length >= 3 ? 0.6 : rs.length >= 1 ? 0.4 : 0;
+    const raw = med === null ? overall : w * med + (1 - w) * overall;
+    return p.tvl_usd * Math.min(2, Math.max(0.05, raw));
+  });
+}
+
+/** The curve, fitted on `train`, applied to `test` (curve value only, no growth or age). */
+function curvePredictions(train: SnapshotProtocol[], test: SnapshotProtocol[]): number[] {
+  const fit = fitCurve(train);
+  return test.map((p) => curveValue(fit, p));
+}
+
+/** Curve vs both baselines on one test set, all predicting the anchors' actual market caps. */
+function compareOn(train: SnapshotProtocol[], test: SnapshotProtocol[]): ValidationComparison {
+  const actual = test.map((p) => p.mcap_usd!);
+  return {
+    curve: validationMetrics(actual, curvePredictions(train, test)),
+    flat_multiple: validationMetrics(actual, flatMultiplePredictions(train, test)),
+    category_multiple: validationMetrics(actual, categoryMultiplePredictions(train, test)),
+  };
+}
+
+/**
+ * Out-of-sample validation, computed at build time from the snapshot alone.
+ * Leave-one-out refits the curve (and its family effects) without each anchor and predicts it;
+ * the time split fits on listings before 2025-01-01 and tests on listings from 2025 on.
+ * Both baselines run on the same folds, so the table honestly shows whether the curve beats
+ * the flat multiples out of sample.
+ */
+export function validate(snapshot: Snapshot): Validation {
+  const anchors = tradedAnchors(snapshot);
+  // Leave-one-out: one fold per anchor.
+  const looActual: number[] = [];
+  const looCurve: number[] = [];
+  const looFlat: number[] = [];
+  const looCat: number[] = [];
+  for (let i = 0; i < anchors.length; i++) {
+    const train = anchors.filter((_, j) => j !== i);
+    const test = [anchors[i]!];
+    looActual.push(test[0]!.mcap_usd!);
+    looCurve.push(curvePredictions(train, test)[0]!);
+    looFlat.push(flatMultiplePredictions(train, test)[0]!);
+    looCat.push(categoryMultiplePredictions(train, test)[0]!);
+  }
+  const dated = anchors.filter((p) => p.listed_at !== null);
+  const train = dated.filter((p) => p.listed_at! < '2025-01-01');
+  const test = dated.filter((p) => p.listed_at! >= '2025-01-01');
+  return {
+    anchors: anchors.length,
+    loo: {
+      n: anchors.length,
+      curve: validationMetrics(looActual, looCurve),
+      flat_multiple: validationMetrics(looActual, looFlat),
+      category_multiple: validationMetrics(looActual, looCat),
+    },
+    time_split: { split: 'listed_at < 2025-01-01 vs >= 2025-01-01', train_n: train.length, test_n: test.length, ...compareOn(train, test) },
   };
 }
 
@@ -513,11 +817,19 @@ export function radarRow(row: BoardRow): RadarRow {
 export function buildRadar(snapshot: Snapshot, cal: Calibration = calibrate(snapshot), model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, cal, model);
   const live = liveRows(snapshot);
+  const anchors = tradedAnchors(snapshot).map((p) => ({ slug: p.slug, name: p.name, tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd! }));
   const early = board.filter((r) => !r.watchlist).length;
   const calibration: CalibrationRow[] = [...cal.byCategory.entries()]
     .filter(([, v]) => v.n > 0)
-    .map(([category, v]) => ({ category, comparables: v.n, median_multiple: v.median === null ? null : round4(v.median), multiple: round4(v.multiple) }))
-    .sort((a, b) => b.multiple - a.multiple || (a.category < b.category ? -1 : 1));
+    .map(([category, v]) => ({
+      category,
+      comparables: v.n,
+      median_residual: v.median_residual === null ? null : round4(v.median_residual),
+      effect: round4(v.effect),
+      effect_multiplier: round4(10 ** v.effect),
+    }))
+    .sort((a, b) => b.effect - a.effect || (a.category < b.category ? -1 : 1));
+  const curve = cal.curve;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -530,8 +842,17 @@ export function buildRadar(snapshot: Snapshot, cal: Calibration = calibrate(snap
     live_size: live.length,
     calibration,
     overall_multiple: round4(cal.overall),
+    curve: {
+      anchors: curve.anchors,
+      intercept: round4(curve.intercept),
+      slope: round4(curve.slope),
+      residual_std: round4(curve.residual_std),
+      r_squared: round4(curve.r_squared),
+    },
+    validation: validate(snapshot),
     rows: board.map(radarRow),
     live,
+    anchors,
   };
   return { board, radar };
 }

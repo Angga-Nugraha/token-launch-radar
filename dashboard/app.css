@@ -1,4 +1,4 @@
-/* Token Radar radar-2 theme. A dark board: deep ink canvas, warm paper panels, one green
+/* Token Radar radar-3 theme. A dark board: deep ink canvas, warm paper panels, one green
    for value and one amber for watchlist rows. System fonts only: the page renders with no network. */
 :root {
   --canvas: #0e1512;
@@ -143,3 +143,23 @@ tbody tr.watch td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+.verdict { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.verdict-farm { color: var(--accent); background: var(--accent-dim); }
+.verdict-thin { color: var(--amber); background: #3a2f14; }
+.verdict-skip { color: #c9d4ca; background: var(--surface-2); border: 1px solid var(--border); }
+
+.method { padding: var(--s5); display: grid; gap: var(--s4); }
+.method p { color: var(--muted); max-width: 84ch; }
+.method h3 { margin-top: var(--s2); }
+.scatter { width: 100%; height: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-control); }
+.scatter .grid { stroke: var(--border); stroke-width: 1; }
+.scatter .ax { fill: var(--muted); font-size: 11px; font-family: var(--font-num); }
+.scatter .curve-line { fill: none; stroke: var(--accent); stroke-width: 2; }
+.scatter .board-dot { fill: #7fa88a; opacity: 0.55; }
+.scatter .anchor-dot { fill: var(--amber); }
+.legend { font-size: 13px; }
+.legend .lg { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: -1px; }
+.legend .lg.anchor-dot { background: var(--amber); }
+.legend .lg.board-dot { background: #7fa88a; }
+.legend .lg.curve-line { width: 18px; height: 2px; border-radius: 0; background: var(--accent); vertical-align: 3px; }
