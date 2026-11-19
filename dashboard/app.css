@@ -1,5 +1,27 @@
-/* Token Radar radar-3 theme. A dark board: deep ink canvas, warm paper panels, one green
-   for value and one amber for watchlist rows. System fonts only: the page renders with no network. */
+/* radar-4: KPI strip, 758 ledger, best farms, what-if controls, ablation rules. */
+.kpi { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--s3); margin: var(--s4) 0; }
+.kpi > div { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); padding: var(--s3) var(--s4); display: grid; gap: 2px; }
+.kpi span { color: var(--muted); font-size: 12px; }
+.kpi b { font-family: var(--font-num); font-size: 19px; color: var(--accent); }
+.kpi small { color: var(--muted); font-size: 12px; }
+.ledger { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); padding: var(--s4) var(--s5); margin-bottom: var(--s4); }
+.ledger h2 { font-size: 16px; }
+.ledger .counts { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin-top: var(--s2); font-size: 13px; color: var(--muted); }
+.ledger .counts b { color: var(--ink); font-family: var(--font-num); }
+.checks { margin-top: var(--s2); color: var(--muted); font-size: 13px; }
+.best { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-panel); padding: var(--s3) var(--s4); margin-bottom: var(--s4); font-size: 13px; color: var(--muted); }
+.best b { color: var(--accent); font-family: var(--font-num); }
+.best .pf { margin-left: auto; }
+.wi { display: flex; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s2); font-size: 13px; color: var(--muted); }
+.wi label { display: flex; align-items: center; gap: var(--s2); }
+.wi select { min-height: 30px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; color: var(--ink); }
+.rules { margin: 0; padding-left: var(--s4); display: grid; gap: var(--s1); color: var(--muted); font-size: 13px; }
+.rules b { color: var(--ink); }
+.method .calib th, .method .calib td { padding: 4px 12px; }
+.method { gap: var(--s3); }
+@media (max-width: 1100px) { .kpi { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 :root {
   --canvas: #0e1512;
   --surface: #182019;

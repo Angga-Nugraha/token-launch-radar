@@ -1,12 +1,13 @@
-// Token Radar radar-3: the in-page model. Every fitted number comes from window.RADAR
+// Token Radar radar-4: the in-page model. Every fitted number comes from window.RADAR
 // (DATA.curve / DATA.model), which the program computed at build time; nothing here is
 // hand-typed. app.js calls these, so the page, the board and the code agree.
-// Note: DATA.curve.residual_std is rounded to 4 decimals, so band() differs from the
-// stored p25_usd/p75_usd by ~0.002% — invisible at the compact money the page shows.
+// curve.residual_std is stored at full precision, so band() agrees with the stored
+// p25_usd/p75_usd to the dollar.
 'use strict';
 window.RADAR_MODEL = (() => {
   const D = () => window.RADAR;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const r2 = (v) => Math.round(v * 100) / 100;
   /** Implied value from the snapshot figures, recomputed in the page. */
   function impliedValue(row) {
     const m = D().model;
@@ -21,14 +22,33 @@ window.RADAR_MODEL = (() => {
     const f = 10 ** (0.6745 * D().curve.residual_std);
     return { p25: Math.max(1, Math.round(implied / f)), p75: Math.max(1, Math.round(implied * f)) };
   }
-  /** Farm economics for a ticket: slice of a 10% airdrop, pro-rata by ticket over TVL,
-      net of the row's build-time fees; verdict by the stated rule. */
-  function farmEV(row, implied) {
-    const slice = Math.round(implied * 0.1 * (row.farm.ticket_usd / row.tvl_usd) * 100) / 100;
+  /** Farm economics, dollar-days slice (radar-4): a hold of H days stands behind
+      min(H, age)/2 day-equivalents, so slice = implied x share x ticket x min(H, age)
+      / (TVL x age). Net deducts gas fees AND the T-bill yield forgone on the ticket.
+      opts: {ticket, share, tbill} — defaults are the row's build-time $1,000 / 10% / 4%. */
+  function farmEV(row, implied, opts) {
+    const o = opts || {};
+    const ticket = o.ticket ?? row.farm.ticket_usd;
+    const share = o.share ?? 0.1;
+    const tbillRate = o.tbill ?? 0.04;
+    const m = D().model;
+    const age = row.age_days ?? m.unknown_age_days;
+    const H = row.farm.farm_days;
+    const held = Math.min(H, age);
+    const sliceRaw = implied * share * ticket * held / (row.tvl_usd * age);
+    const slice = r2(sliceRaw);
+    const sliceSnap = r2(implied * share * ticket / row.tvl_usd);
     const fees = row.farm.fees_usd;
-    const net = Math.round((slice - fees) * 100) / 100;
-    const verdict = net > 0 && slice >= 2 * fees ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
-    return { ticket_usd: row.farm.ticket_usd, slice_usd: slice, fees_usd: fees, hours: row.farm.hours, net_usd: net, verdict };
+    const tbill = r2(ticket * tbillRate * H / 365);
+    const total = r2(fees + tbill);
+    const net = r2(slice - total);
+    const perHour = r2(net / row.farm.hours);
+    const be = sliceRaw > 0 ? Math.round((fees + tbill) / sliceRaw * 10000) / 10000 : null;
+    const k = sliceRaw / ticket;
+    const tb = tbillRate * H / 365;
+    const pays = k > tb ? Math.max(1, Math.ceil(fees / (k - tb))) : null;
+    const verdict = net > 0 && slice >= 2 * total ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
+    return { ticket_usd: ticket, share, tbill_rate: tbillRate, farm_days: H, day_equivalents: held / 2, slice_usd: slice, slice_snapshot_usd: sliceSnap, fees_usd: fees, tbill_usd: tbill, total_cost_usd: total, hours: row.farm.hours, net_usd: net, per_hour_usd: perHour, breakeven_odds: be, pays_from_usd: pays, verdict };
   }
   return { impliedValue, band, farmEV };
 })();

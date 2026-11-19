@@ -1,7 +1,7 @@
-// Token Radar radar-3: a static page, no framework and no network. It renders the board from
+// Token Radar radar-4: a static page, no framework and no network. It renders the board from
 // the data this program wrote beside it. The model lives in model.js and recomputes every
-// row's implied value, band and farm economics from the snapshot figures, so the page, the
-// board and the code agree with each other.
+// row's implied value, band and farm economics (dollar-days slice, T-bill deducted) from the
+// snapshot figures, so the page, the board and the code agree with each other.
 'use strict';
 
 const main = document.querySelector('#board');
@@ -37,76 +37,6 @@ const chainText = (chains) => {
   return chains.length > 3 ? `${shown} +${chains.length - 3} more` : shown;
 };
 
-/** What one transaction costs on a chain, in the words a farmer budgets by. */
-function gasFor(chain) {
-  if (chain === 'Ethereum') return 'about $3 to $8 of gas per transaction';
-  if (chain === 'Solana') return 'under $0.05 of fees per transaction';
-  if (chain === 'Bitcoin') return 'about $1 to $5 of network fees per transaction';
-  if (chain === 'Tron') return 'about $1 to $3 of energy fees per transaction';
-  if (['Arbitrum', 'Optimism', 'Base', 'Ink', 'Blast', 'Mode', 'Zora', 'Unichain', 'World Chain', 'Scroll', 'Linea', 'Polygon zkEVM', 'Mantle', 'Manta', 'Fraxtal', 'Abstract', 'Soneium', 'Berachain'].includes(chain)) return 'under $0.30 of gas per transaction';
-  if (['Binance', 'Avalanche', 'Polygon', 'Gnosis', 'Fantom', 'Celo', 'Kava', 'Sei', 'Sui', 'Aptos', 'Near', 'Starknet', 'zkSync Era'].includes(chain)) return 'under $0.50 of gas per transaction';
-  return 'under $1 of gas per transaction';
-}
-function capitalFor(tvl) {
-  if (tvl >= 5_000_000_000) return 250;
-  if (tvl >= 1_000_000_000) return 150;
-  if (tvl >= 100_000_000) return 100;
-  return 50;
-}
-function holdDaysFor(age) {
-  if (age === null || age === undefined) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
-  return 30;
-}
-function actionFor(category, name, capital, chain) {
-  const c = (category || '').toLowerCase();
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the vault shares in your wallet.`;
-  if (c.includes('dex')) return `Provide $${capital} of liquidity to ${name}'s deepest pool on ${chain} in the pair it lists first, and keep the LP tokens.`;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain}, then borrow a small amount against it and repay it the same week.`;
-  if (c.includes('rwa')) return `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it in your wallet.`;
-  if (c.includes('yield') || c.includes('leveraged farm')) return `Deposit $${capital} of USDC into ${name}'s highest-TVL strategy on ${chain} and keep the receipt tokens.`;
-  if (c.includes('derivative') || c.includes('perpetual')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedged position, then close it within a week.`;
-  if (c.includes('basis')) return `Deposit $${capital} into ${name}'s basis vault on ${chain} and keep the vault shares.`;
-  if (c.includes('prediction')) return `Fund $${capital} on ${name} and take one position in its most liquid market.`;
-  if (c.includes('restak')) return `Restake $${capital} of the chain's staking asset through ${name} and keep the receipt token.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain} and hold it.`;
-  if (c.includes('chain')) return `Bridge $${capital} of USDC to ${chain} through its official bridge, then use ${name}'s native app once.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC across ${name} to ${chain} and use the bridged funds in its app.`;
-  if (c.includes('governance')) return `Stake $${capital} of the governance asset through ${name} and vote once while it is staked.`;
-  if (c.includes('farm')) return `Stake $${capital} of LP tokens in ${name}'s farm on ${chain} and keep the position open.`;
-  if (c.includes('otc')) return `Place one $${capital} order through ${name} and settle it on ${chain}.`;
-  if (c.includes('payment')) return `Move $${capital} through ${name} on ${chain} and keep the receipt for the activity.`;
-  if (c.includes('cedefi')) return `Deposit $${capital} with ${name} on ${chain} and keep the deposit receipt.`;
-  if (c.includes('liquidity manager')) return `Deposit $${capital} into a ${name} managed range on ${chain} and keep the position.`;
-  if (c.includes('anchor') || c.includes('decentralized btc')) return `Deposit $${capital} of BTC-backed value through ${name} on ${chain} and keep the receipt.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
-}
-function stepText(step) {
-  let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
-  if (s.length > 600) s = `${s.slice(0, 596)}...`;
-  if (s.length < 20) s = `${s} Hold the position and check the protocol's own page.`;
-  return s;
-}
-/** A protocol's farm plan, generated from its own record, in the same words as the board file. */
-function farmSteps(row) {
-  const chain = row.chains.length > 0 ? row.chains[0] : 'its main chain';
-  const gas = gasFor(chain);
-  const capital = capitalFor(row.tvl_usd);
-  const hold = holdDaysFor(row.age_days);
-  const action = actionFor(row.category, row.name, capital, chain);
-  return [
-    { text: 'Use a fresh wallet that holds only the funds you plan to farm, and keep its seed phrase offline.', cost: gas.replace('per transaction', 'for the first transaction'), time: '5 minutes' },
-    { text: action, cost: `$${capital} of capital and ${gas}`, time: '15 minutes to set up' },
-    { text: `Repeat one qualifying action each week on ${chain}, such as a deposit, a swap, a vote or a claim, so the wallet stays active.`, cost: gas.replace('per transaction', 'a week'), time: '10 minutes a week' },
-    { text: `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot.`, cost: `the $${capital} stays in the position`, time: `${hold} days` },
-    { text: `Open ${row.name}'s own points or rewards page in its app and check your balance; claim only from the link the app itself publishes.`, cost: 'no fee to check, and never pay to claim', time: '10 minutes' },
-    { text: 'Keep this farm under 10% of your farm bankroll: never deposit funds you need back this month, and never borrow against the position.', cost: 'nothing but discipline', time: '5 minutes to size it' },
-    { text: 'Write the wallet, the dates and every transaction hash in a farm log, and plan your exit: unstake, withdraw and revoke the approval.', cost: gas.replace('per transaction', 'to unwind'), time: '10 minutes to log it' },
-  ].map(stepText);
-}
-
 const CATEGORIES = [...new Set(DATA.rows.map((r) => r.category).filter(Boolean))].sort();
 const CHAINS = [...new Set(DATA.rows.flatMap((r) => r.chains))].sort();
 const MAX_IMPLIED = Math.max(...DATA.rows.map((r) => r.implied_value_usd));
@@ -137,6 +67,7 @@ function readHash() {
   };
 }
 let state = readHash();
+let wi = { ticket: 1000, share: 10, tbill: 4 };
 function writeHash() {
   const h = new URLSearchParams();
   if (state.tab !== 'pre') h.set('tab', state.tab);
@@ -149,6 +80,35 @@ function writeHash() {
   if (state.slug) h.set('p', state.slug);
   const s = h.toString();
   history.replaceState(null, '', s ? `#${s}` : location.pathname);
+}
+
+
+const REASON = { bridge: 'Bridge', liquid_staking: 'Liquid staking', exchange_custody: 'Exchange custody', versioned_listing: 'Versioned listing', wrapped_staked: 'Wrapped / staked', kin_of_token: 'Kin of a token' };
+const beText = (be) => be === null ? '—' : be > 1 ? `${(be * 100).toFixed(0)}% — never pays at any launch odds` : `${(be * 100).toFixed(1)}% launch odds`;
+function wfTable() {
+  const w = DATA.walk_forward;
+  const row = (o) => `<tr><td>${Math.round(o.fraction * 100)}%</td><td class="num">${o.train_n}/${o.test_n}</td><td class="num">${o.curve.median_miss.toFixed(2)}×</td><td class="num">${o.curve.within_3x_pct.toFixed(1)}%</td><td class="num">${o.board.median_miss.toFixed(2)}×</td><td class="num">${o.flat_multiple.median_miss.toFixed(2)}×</td></tr>`;
+  return `<table class="calib"><thead><tr><th scope="col">Origin</th><th scope="col">Train/test</th><th scope="col">Curve miss</th><th scope="col">Curve ≤3×</th><th scope="col">Board miss</th><th scope="col">Flat miss</th></tr></thead><tbody>${w.origins.map(row).join('')}<tr><td><b>Overall (120 tests)</b></td><td class="num">—</td><td class="num"><b>${w.overall_curve.median_miss.toFixed(2)}×</b></td><td class="num">${w.overall_curve.within_3x_pct.toFixed(1)}%</td><td class="num"><b>${w.overall_board.median_miss.toFixed(2)}×</b></td><td class="num">${w.overall_flat.median_miss.toFixed(2)}×</td></tr></tbody></table><p>Curve and flat score the fitted curve only (same basis as LOO); board scores the shipped formula, curve × growth × maturity.</p>`;
+}
+function ablTable() {
+  const a = DATA.ablation;
+  const d = (v) => (v === 0 ? '—' : (v > 0 ? '+' : '') + v.toFixed(2));
+  return `<p>Keep rule: “${esc(a.keep_rule)}” (paired bootstrap, 2000 draws, seed 1).</p><table class="calib"><thead><tr><th scope="col">Rung</th><th scope="col">LOO miss</th><th scope="col">≤3×</th><th scope="col">RANK</th><th scope="col">WF miss</th><th scope="col">Δ LOO</th><th scope="col">Δ WF</th><th scope="col">SE</th><th scope="col">Rule</th></tr></thead><tbody>${a.rungs.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${r.loo_miss.toFixed(2)}×</td><td class="num">${r.loo_within_3x_pct.toFixed(1)}%</td><td class="num">${r.loo_spearman.toFixed(3)}</td><td class="num">${r.wf_miss.toFixed(2)}×</td><td class="num">${d(r.delta_loo)}</td><td class="num">${d(r.delta_wf)}</td><td class="num">${r.se === 0 ? '—' : r.se.toFixed(3)}</td><td><span class="verdict ${r.rule === 'KEPT' ? 'verdict-farm' : ''}">${r.rule}</span></td></tr>`).join('')}</tbody></table><ul class="rules">${a.rungs.map((r) => `<li><b>${esc(r.name)}:</b> ${esc(r.rule_detail)}</li>`).join('')}</ul>`;
+}
+function rejTable() {
+  const a = DATA.ablation;
+  return `<table class="calib"><thead><tr><th scope="col">Rejected try</th><th scope="col">LOO</th><th scope="col">WF</th><th scope="col">Time-split</th><th scope="col">TS rank</th><th scope="col">Why rejected</th></tr></thead><tbody>${a.rejected.map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${r.loo_miss.toFixed(2)}×</td><td class="num">${r.wf_miss.toFixed(2)}×</td><td class="num">${r.ts_miss.toFixed(2)}×</td><td class="num">${r.ts_spearman.toFixed(3)}</td><td>${esc(r.reason)}</td></tr>`).join('')}</tbody></table>`;
+}
+function ledgerTabHtml() {
+  if (state.tab === 'traded') return `<div class="panel"><div class="table-wrap"><table><thead><tr><th scope="col">Protocol</th><th scope="col">Category</th><th scope="col">TVL</th><th scope="col">Market cap</th><th scope="col">7d change</th></tr></thead><tbody>${DATA.traded.map((t) => `<tr><td><span class="name"><b>${esc(t.name)}</b><span class="sub">${esc(t.slug)}</span></span></td><td>${esc(t.category || 'Uncategorized')}</td><td class="num">${money(t.tvl_usd)}</td><td class="num">${money(t.mcap_usd)}</td><td class="num ${t.change_7d >= 0 ? 'pos' : 'neg'}">${changeText(t.change_7d)}</td></tr>`).join('')}</tbody></table></div></div><p class="note" style="margin-top:12px">These ${DATA.traded.length} protocols already trade a token, so they are the curve's anchors and the board's comparables — not launches to rank.</p>`;
+  if (state.tab === 'record') return `<div class="panel"><div class="table-wrap"><table><thead><tr><th scope="col">Protocol</th><th scope="col">Category</th><th scope="col">Symbol</th><th scope="col">CoinGecko id</th></tr></thead><tbody>${DATA.on_record.map((t) => `<tr><td><span class="name"><b>${esc(t.name)}</b><span class="sub">${esc(t.slug)}</span></span></td><td>${esc(t.category || 'Uncategorized')}</td><td class="num">${esc(t.symbol || '—')}</td><td>${esc(t.gecko_id || '—')}</td></tr>`).join('')}</tbody></table></div></div><p class="note" style="margin-top:12px">These ${DATA.on_record.length} protocols record a token in the snapshot, so they are off the board: a token on record is not a launch.</p>`;
+  if (state.tab === 'setaside') return `<div class="panel"><div class="table-wrap"><table><thead><tr><th scope="col">Protocol</th><th scope="col">Category</th><th scope="col">Set aside because</th></tr></thead><tbody>${DATA.set_aside.map((t) => `<tr><td><span class="name"><b>${esc(t.name)}</b><span class="sub">${esc(t.slug)}</span></span></td><td>${esc(t.category || 'Uncategorized')}</td><td>${esc(REASON[t.reason] || t.reason)}</td></tr>`).join('')}</tbody></table></div></div><p class="note" style="margin-top:12px">Set aside by the board's exclusion rule, first matching rule wins: bridge ${DATA.ledger.set_aside.bridge}, liquid staking ${DATA.ledger.set_aside.liquid_staking}, exchange custody ${DATA.ledger.set_aside.exchange_custody}, versioned listing ${DATA.ledger.set_aside.versioned_listing}, wrapped / staked ${DATA.ledger.set_aside.wrapped_staked}, kin of a token ${DATA.ledger.set_aside.kin_of_token}.</p>`;
+  return '';
+}
+function tabHtml() {
+  if (state.tab === 'traded' || state.tab === 'record' || state.tab === 'setaside') return ledgerTabHtml();
+  if (state.tab === 'method') return methodHtml();
+  return '';
 }
 
 function filteredRows() {
@@ -176,7 +136,7 @@ function rowHtml(r) {
   const b = M.band(implied);
   const v = r.farm.verdict;
   return `<tr data-slug="${esc(r.slug)}" data-selected="${state.slug === r.slug}" class="${r.watchlist ? 'watch' : ''}">
-    <td class="num">${r.rank}</td>
+    <td class="num">${r.rank}<br><span class="sub">${r.rank_min}–${r.rank_max}</span></td>
     <td><span class="name"><b>${esc(r.name)}</b><span class="sub">${esc(r.category || 'Uncategorized')} · ${esc(chainText(r.chains))} · ${ageText(r.age_days)}</span></span></td>
     <td class="num">${money(r.tvl_usd)}</td>
     <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg'}">${changeText(r.change_7d)}</td>
@@ -204,7 +164,7 @@ function validRow(label, v) {
   return `<tr><td>${label}</td><td class="num">${v.median_miss.toFixed(2)}×</td><td class="num">${v.within_2x_pct.toFixed(1)}%</td><td class="num">${v.within_3x_pct.toFixed(1)}%</td><td class="num">${v.spearman.toFixed(2)}</td></tr>`;
 }
 function validTable(set) {
-  return `<table class="calib"><thead><tr><th scope="col">Method</th><th scope="col">Median miss</th><th scope="col">Within 2×</th><th scope="col">Within 3×</th><th scope="col">Spearman</th></tr></thead><tbody>${validRow('Size curve (radar-3)', set.curve)}${validRow('Flat multiple', set.flat_multiple)}${validRow('Category multiple (radar-2)', set.category_multiple)}</tbody></table>`;
+  return `<table class="calib"><thead><tr><th scope="col">Method</th><th scope="col">Median miss</th><th scope="col">Within 2×</th><th scope="col">Within 3×</th><th scope="col">Spearman</th></tr></thead><tbody>${validRow('Size curve (Huber, radar-4)', set.curve)}${validRow('Flat multiple', set.flat_multiple)}${validRow('Category multiple (radar-2)', set.category_multiple)}</tbody></table>`;
 }
 
 /** Log-log scatter: traded protocols in this file, board implied values, fitted curve. */
@@ -235,20 +195,26 @@ function methodHtml() {
   const loo = v.loo, ts = v.time_split;
   return `<section class="panel method" aria-label="Method and tests">
     <h2>Method &amp; tests</h2>
-    <p>The model is a fitted size curve, not a flat multiple. OLS on log10(mcap) against log10(TVL) over ${c.anchors} traded anchors — protocols with a real market cap above zero, excluding exchanges and bridges — plus one shrunk effect per category: the median log-residual of the category's anchors, shrunk toward 0 with pseudo comps, so one comparable never sets an effect on its own.</p>
-    <div class="formula">log10(mcap) = ${c.intercept} + ${c.slope} × log10(TVL) + family effect<br>implied = 10^(curve) × (1 + ${m.growth_weight} × clamp(change_7d, ${m.growth_floor}, ${m.growth_cap}) / 100) × (${m.maturity_floor} + min(age_days, ${m.maturity_days}) / ${m.maturity_days} × ${m.maturity_range})<br>R² = ${c.r_squared}, residual std = ${c.residual_std} (log10), anchors = ${c.anchors}</div>
-    <p>Growth is the 7-day TVL change; maturity rises from ${m.maturity_floor} at listing to 1.00 over ${m.maturity_days} days, and a protocol with no listing date counts as ${m.unknown_age_days} days. There is no chain spread in radar-3: the curve already prices size, and chain count added noise. The P25–P75 band is implied × 10^(±0.6745 × ${c.residual_std}) — the central half of the residual distribution.</p>
+    <p>The model is a fitted size curve, not a flat multiple. Huber IRLS (c = 1.345, scale 1.4826 × MAD, refitted every iteration) on log10(mcap) against log10(TVL) over ${c.anchors} traded anchors, plus one shrunk effect per category: the median log-residual, shrunk toward 0 with k = 12 pseudo comps and a min_n = 3 floor, so a category with fewer than 3 anchors gets no effect.</p>
+    <div class="formula">log10(mcap) = ${c.intercept.toFixed(4)} + ${c.slope.toFixed(4)} × log10(TVL) + family effect<br>implied = 10^(curve) × (1 + ${m.growth_weight} × clamp(change_7d, ${m.growth_floor}, ${m.growth_cap}) / 100) × (${m.maturity_floor} + min(age_days, ${m.maturity_days}) / ${m.maturity_days} × ${m.maturity_range})<br>R² = ${c.r_squared}, residual std = ${c.residual_std.toFixed(4)} (log10), anchors = ${c.anchors}</div>
+    <p>Growth is the 7-day TVL change; maturity rises from ${m.maturity_floor} at listing to 1.00 over ${m.maturity_days} days, and a protocol with no listing date counts as ${m.unknown_age_days} days. Growth and maturity are stated board assumptions, not fitted regressors. No chain spread: the curve already prices size. The P25–P75 band is implied × 10^(±0.6745 × ${c.residual_std.toFixed(4)}).</p>
+    <h3>Walk-forward validation — 5 origins by listed_at (80 dated anchors)</h3>
+    ${wfTable()}
+    <h3>Ablation — every rung kept or rejected by rule</h3>
+    ${ablTable()}
+    <h3>Rejected tries</h3>
+    ${rejTable()}
     <h3>Out-of-sample validation — leave-one-out (n = ${loo.n})</h3>
     ${validTable(loo)}
     <h3>Out-of-sample validation — time split (${esc(ts.split)}; train ${ts.train_n}, test ${ts.test_n})</h3>
     ${validTable(ts)}
-    <p class="note">Honest caveat: the curve beats both baselines on miss magnitude on both test sets — leave-one-out median miss ${loo.curve.median_miss}× vs flat ${loo.flat_multiple.median_miss}× and category ${loo.category_multiple.median_miss}×; time-split ${ts.curve.median_miss}× vs ${ts.flat_multiple.median_miss}× and ${ts.category_multiple.median_miss}× — but NOT on rank: leave-one-out Spearman ${loo.curve.spearman} vs flat ${loo.flat_multiple.spearman} and category ${loo.category_multiple.spearman}. The curve prices size better than it ranks, and absolute accuracy is still poor: only ${loo.curve.within_3x_pct}% of leave-one-out predictions land within 3×. The wide P25–P75 bands say the same thing.</p>
+    <p class="note">Bands hold: P25–P75 ${DATA.bands_hold.p25_p75_pct}% · P10–P90 ${DATA.bands_hold.p10_p90_pct}% (aim 50, 80), n = ${DATA.bands_hold.n} leave-one-out predictions. ${esc(DATA.not_tvl_alone.text)} — the model adds information beyond sorting by TVL. ${esc(DATA.rank_ranges.summary)}: rank ranges from ${DATA.rank_ranges.refits} bootstrap refits are shown under every rank on the board. Absolute accuracy is still poor: only ${loo.curve.within_3x_pct}% of leave-one-out predictions land within 3×. The wide P25–P75 bands say the same thing.</p>
     ${scatterSvg()}
     <h3>Calibration — family effect by category</h3>
     <table class="calib"><thead><tr><th scope="col">Category</th><th scope="col">Comparables</th><th scope="col">Median residual</th><th scope="col">Effect</th><th scope="col">Effect multiplier</th></tr></thead>
     <tbody>${DATA.calibration.map((c2) => `<tr><td>${esc(c2.category)}</td><td class="num">${c2.comparables}</td><td class="num">${c2.median_residual === null ? '—' : c2.median_residual.toFixed(2)}</td><td class="num">${c2.effect.toFixed(2)}</td><td class="num">${c2.effect_multiplier.toFixed(2)}×</td></tr>`).join('')}</tbody></table>
     <h3>Farm economics — stated assumptions</h3>
-    <p>Every row's farm economics assume a $${DATA.rows[0].farm.ticket_usd.toLocaleString('en-US')} ticket, a launch that airdrops 10% of implied value shared pro-rata by ticket over TVL, 8 transactions over 90 days, and ${DATA.rows[0].farm.hours} hours of work. Fees are 8 × the per-transaction gas of the protocol's first chain. Verdict: FARM when the slice covers the fees twice over, THIN when it merely covers them, else SKIP. ${DATA.rows.filter((r) => r.farm.verdict === 'FARM').length} rows are FARM, ${DATA.rows.filter((r) => r.farm.verdict === 'THIN').length} THIN, ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP').length} SKIP — of the SKIP rows, ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP' && r.farm.fees_usd >= 44).length} carry the highest fee ($${Math.max(...DATA.rows.filter((r) => r.farm.verdict === 'SKIP').map((r) => r.farm.fees_usd)).toFixed(2)}), the Ethereum rate, against a slice of a few dollars.</p>
+    <p>Every row's farm economics assume a $${DATA.rows[0].farm.ticket_usd.toLocaleString('en-US')} ticket, a launch that airdrops 10% of implied value shared by dollar-days: a hold of H days (60 if age &lt; 180d, 45 if &lt; 365d, else 30) stands behind min(H, age) / 2 day-equivalents, so a protocol younger than the hold can never pay more than its time-weighted slice. Fees are 8 × the per-transaction gas of the protocol's first chain, the T-bill yield forgone (4% a year on the ticket) is deducted too, and the work is ${DATA.rows[0].farm.hours} hours. Verdict: FARM when the slice covers the total cost twice over, THIN when it merely covers it, else SKIP. ${DATA.rows.filter((r) => r.farm.verdict === 'FARM').length} rows are FARM, ${DATA.rows.filter((r) => r.farm.verdict === 'THIN').length} THIN, ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP').length} SKIP.</p>
   </section>`;
 }
 
@@ -263,6 +229,19 @@ function render() {
       <div class="brand"><span class="mark" aria-hidden="true"></span><span class="brand-name">Token Radar · ${esc(DATA.model_version)}</span></div>
       <div class="top-meta"><span>Snapshot ${esc(DATA.as_of)}</span><span>${esc(DATA.source)}</span><span>Model ${esc(DATA.model_version)}</span></div>
     </header>
+    <section class="kpi" aria-label="Key figures">
+      <div><span>Ranked</span><b>${DATA.kpis.ranked}</b><small>pre-token protocols</small></div>
+      <div><span>Implied value</span><b>${money(DATA.kpis.implied_total_usd)}</b><small>board total</small></div>
+      <div><span>Held-out miss</span><b>${DATA.kpis.loo_miss.toFixed(2)}×</b><small>LOO · ${DATA.kpis.ts_miss.toFixed(2)}× time-split</small></div>
+      <div><span>Range holds</span><b>${DATA.kpis.range_holds_p25_p75_pct.toFixed(2)}%</b><small>P25–P75 bands, aim 50</small></div>
+      <div><span>Worth farming</span><b>${DATA.kpis.worth_farming} FARM</b><small>${DATA.rows.filter((r) => r.farm.verdict === 'THIN').length} THIN · ${DATA.rows.filter((r) => r.farm.verdict === 'SKIP').length} SKIP</small></div>
+      <div><span>Best $/hour</span><b>$${DATA.kpis.best_per_hour_10k_usd.toFixed(2)}</b><small>$${DATA.kpis.best_per_hour_usd.toFixed(2)}/h on a $1,000 ticket</small></div>
+    </section>
+    <section class="ledger" aria-label="758 protocols accounted for">
+      <h2>758 protocols accounted for</h2>
+      <div class="counts"><span>Ranked <b>${DATA.ledger.ranked}</b></span><span>Token trades <b>${DATA.ledger.token_trades}</b></span><span>Token on record <b>${DATA.ledger.token_on_record}</b></span><span>Set aside <b>${DATA.ledger.set_aside_total}</b></span><span class="sub">bridge ${DATA.ledger.set_aside.bridge} · liquid staking ${DATA.ledger.set_aside.liquid_staking} · exchange custody ${DATA.ledger.set_aside.exchange_custody} · versioned listing ${DATA.ledger.set_aside.versioned_listing} · wrapped / staked ${DATA.ledger.set_aside.wrapped_staked} · kin of a token ${DATA.ledger.set_aside.kin_of_token}</span></div>
+      <p class="checks">Bands hold P25–P75 ${DATA.bands_hold.p25_p75_pct}% · P10–P90 ${DATA.bands_hold.p10_p90_pct}% (aim 50, 80) · ${esc(DATA.not_tvl_alone.text)} · ${esc(DATA.rank_ranges.summary)}.</p>
+    </section>
     <section class="lede" aria-label="What this board is">
       <div>
         <h1>Every protocol with no token yet, ranked by what its launch would be worth.</h1>
@@ -272,7 +251,7 @@ function render() {
         <div class="fact"><span>Protocols ranked</span><b>${DATA.board_size}</b></div>
         <div class="fact"><span>Watchlist covered</span><b>${DATA.watchlist_size} of ${DATA.watchlist_size}</b></div>
         <div class="fact"><span>Early radar (outside watchlist)</span><b>${DATA.early_size}</b></div>
-        <div class="fact"><span>Already trading, set aside</span><b>${DATA.live_size}</b></div>
+        <div class="fact"><span>Off the board</span><b>${DATA.ledger.total - DATA.board_size}</b></div>
         <div class="fact"><span>Highest implied value</span><b>${money(topImplied.implied_value_usd)} · ${esc(topImplied.name)}</b></div>
         <div class="fact"><span>Total implied value</span><b>${money(totalImplied)}</b></div>
         <div class="fact"><span>Anchors' median mcap/TVL</span><b>${DATA.overall_multiple.toFixed(2)}×</b></div>
@@ -282,6 +261,11 @@ function render() {
     <section class="spot" aria-label="Top five by implied value">
       ${top.map((r) => `<button class="spot-card" data-slug="${esc(r.slug)}"><span class="spot-rank">#${r.rank}</span><b>${esc(r.name)}</b><span class="num">${money(r.implied_value_usd)}</span><span class="sub">${money(r.tvl_usd)} TVL · ${r.multiple.toFixed(2)}× multiple</span></button>`).join('')}
     </section>
+    <section class="best" aria-label="Best farms now">
+      <span><b>Best farms now, by net on $10,000:</b></span>
+      ${DATA.best_farms.map((f) => `<span>${esc(f.name)} <b>$${f.net_usd.toFixed(2)} net · $${f.per_hour_usd.toFixed(2)}/h</b> · fees $${f.fees_usd.toFixed(2)} · ${f.days}d</span>`).join('')}
+      <span class="pf">FARM + THIN ${DATA.portfolio.farm_thin_count} rows · costs $${DATA.portfolio.costs_usd.toFixed(2)} · net $${DATA.portfolio.net_usd.toFixed(2)} · ${DATA.portfolio.hours}h</span>
+    </section>
     <div class="controls">
       <div class="field"><label for="q">Search</label><input id="q" type="search" value="${esc(state.q)}" placeholder="Name, slug or category" autocomplete="off"></div>
       <div class="field"><label for="category">Category</label><select id="category"><option value="">All categories</option>${CATEGORIES.map((c) => `<option value="${esc(c)}" ${state.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
@@ -290,10 +274,13 @@ function render() {
       <label class="check"><input type="checkbox" id="watch" ${state.watch ? 'checked' : ''}> Watchlist only</label>
       <div class="tabs" role="group" aria-label="Board, live token or method view">
         <button data-tab="pre" aria-pressed="${state.tab === 'pre'}">Pre-token</button>
+        <button data-tab="traded" aria-pressed="${state.tab === 'traded'}">Token trades</button>
+        <button data-tab="record" aria-pressed="${state.tab === 'record'}">Token on record</button>
+        <button data-tab="setaside" aria-pressed="${state.tab === 'setaside'}">Set aside</button>
         <button data-tab="live" aria-pressed="${state.tab === 'live'}">Live token</button>
         <button data-tab="method" aria-pressed="${state.tab === 'method'}">Method &amp; tests</button>
       </div>
-      <span class="count" aria-live="polite">${state.tab === 'pre' ? `${rows.length} of ${DATA.board_size} rows` : state.tab === 'live' ? `${DATA.live.length} live-token protocols` : 'Fitted curve, backtests and calibration'}</span>
+      <span class="count" aria-live="polite">${state.tab === 'pre' ? `${rows.length} of ${DATA.board_size} rows` : state.tab === 'live' ? `${DATA.live.length} live-token protocols` : state.tab === 'traded' ? `${DATA.traded.length} protocols already trade a token` : state.tab === 'record' ? `${DATA.on_record.length} protocols record a token` : state.tab === 'setaside' ? `${DATA.set_aside.length} protocols set aside by rule` : 'Fitted curve, backtests and calibration'}</span>
     </div>
     ${state.tab === 'pre' ? `<div class="panel"><div class="table-wrap"><table>
       <caption class="sr-only" style="position:absolute;left:-9999px">Pre-token protocols ranked by implied value</caption>
@@ -304,10 +291,10 @@ function render() {
       <thead><tr><th scope="col">Protocol</th><th scope="col">TVL</th><th scope="col">7d change</th><th scope="col">Market cap</th><th scope="col">FDV/TVL</th></tr></thead>
       <tbody>${DATA.live.map(liveHtml).join('')}</tbody>
     </table></div></div>
-    <p class="note" style="margin-top:12px">These ${DATA.live.length} protocols already trade, so the board shows the market's own value for them instead of a model's. The curve is fitted on the traded anchors, not on these rows alone.</p>` : methodHtml()}
+    <p class="note" style="margin-top:12px">These ${DATA.live.length} protocols already trade, so the board shows the market's own value for them instead of a model's. The curve is fitted on the traded anchors, not on these rows alone.</p>` : tabHtml()}
     ${state.tab === 'method' ? '' : `<section class="panel model" aria-label="How the model works">
       <h2>How the implied value is built</h2>
-      <p>A fitted size curve, not a flat multiple: log10(mcap) = ${DATA.curve.intercept} + ${DATA.curve.slope} × log10(TVL), fitted by OLS on ${DATA.curve.anchors} traded anchors, plus a shrunk category effect — then growth (7-day TVL change, clamped ${DATA.model.growth_floor}% to +${DATA.model.growth_cap}%, weighted ${DATA.model.growth_weight}) and maturity (from ${DATA.model.maturity_floor} at listing to 1.00 over ${DATA.model.maturity_days} days; no listing date counts as ${DATA.model.unknown_age_days} days). No chain spread: the curve already prices size. The full formula, the out-of-sample backtests, the calibration table and the scatter plot are in the <b>Method &amp; tests</b> tab.</p>
+      <p>A fitted size curve, not a flat multiple: log10(mcap) = ${DATA.curve.intercept} + ${DATA.curve.slope} × log10(TVL), fitted by Huber IRLS (c = 1.345) on ${DATA.curve.anchors} traded anchors, plus a shrunk category effect (k = 12, min_n = 3) — then growth (7-day TVL change, clamped ${DATA.model.growth_floor}% to +${DATA.model.growth_cap}%, weighted ${DATA.model.growth_weight}) and maturity (from ${DATA.model.maturity_floor} at listing to 1.00 over ${DATA.model.maturity_days} days; no listing date counts as ${DATA.model.unknown_age_days} days). No chain spread: the curve already prices size. Walk-forward (5 origins), the ablation table with kept/rejected rungs, rank ranges from 200 refits, and the full backtests are in the <b>Method &amp; tests</b> tab.</p>
       <div class="formula">implied = 10^(${DATA.curve.intercept} + ${DATA.curve.slope} × log10(tvl_usd) + family effect)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;× (1 + ${DATA.model.growth_weight} × clamp(change_7d, ${DATA.model.growth_floor}, ${DATA.model.growth_cap}) / 100) × (${DATA.model.maturity_floor} + min(age_days, ${DATA.model.maturity_days}) / ${DATA.model.maturity_days} × ${DATA.model.maturity_range})</div>
       <p class="note">The board is a radar, not a promise: the median out-of-sample miss is ${DATA.validation.loo.curve.median_miss}× leave-one-out, so read every implied value with its P25–P75 band. A launch may never happen.</p>
     </section>`}
@@ -328,43 +315,47 @@ function renderDetail() {
   }
   const age = row.age_days === null ? DATA.model.unknown_age_days : row.age_days;
   const implied = M.impliedValue(row);
-  const ev = M.farmEV(row, implied);
+  const ev = M.farmEV(row, implied, { ticket: wi.ticket, share: wi.share / 100, tbill: wi.tbill / 100 });
   const b = M.band(implied);
   const calib = DATA.calibration.find((c) => c.category === (row.category || 'Other'));
   const comps = DATA.live.filter((l) => l.category === row.category).slice(0, 5);
-  const steps = farmSteps(row);
-  dlg.innerHTML = `<div class="detail-head"><div><span class="badge ${row.watchlist ? 'watch' : ''}">#${row.rank} · ${row.watchlist ? 'Watchlist' : 'Early radar'}</span><h2>${esc(row.name)}</h2><p class="sub">${esc(row.category || 'Uncategorized')} · ${esc(row.chains.join(', ') || 'no chain listed')} · ${ageText(row.age_days)} · ${money(row.tvl_usd)} TVL</p></div><button class="close" data-close="1" aria-label="Close detail">Close ×</button></div>
+  const steps = row.farm_steps;
+  const wiSel = (id, vals, cur) => `<select id="${id}">${vals.map((v) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${id === 'wi-ticket' ? '$' + v.toLocaleString('en-US') : v + '%'}</option>`).join('')}</select>`;
+  dlg.innerHTML = `<div class="detail-head"><div><span class="badge ${row.watchlist ? 'watch' : ''}">#${row.rank} · ${row.watchlist ? 'Watchlist' : 'Early radar'} · rank range ${row.rank_min}–${row.rank_max} in 200 refits</span><h2>${esc(row.name)}</h2><p class="sub">${esc(row.category || 'Uncategorized')} · ${esc(row.chains.join(', ') || 'no chain listed')} · ${ageText(row.age_days)} · ${money(row.tvl_usd)} TVL</p></div><button class="close" data-close="1" aria-label="Close detail">Close ×</button></div>
+  <section class="detail-section"><h3>Farm economics — $${ev.ticket_usd.toLocaleString('en-US')} ticket</h3>
+    <div class="wi"><label>Deposit ${wiSel('wi-ticket', [1000, 5000, 25000], wi.ticket)}</label><label>To farmers ${wiSel('wi-share', [5, 10, 20], wi.share)}</label><label>T-bill yield ${wiSel('wi-tbill', [0, 4, 8], wi.tbill)}</label></div>
+    <div class="equation">
+      <div><span>Airdrop slice (dollar-days, ${ev.share * 100}% of implied)</span><b>$${ev.slice_usd.toFixed(2)}</b></div>
+      <div><span>Your ${ev.farm_days} days stand behind ${ev.day_equivalents} day-equivalents</span><b>${ev.day_equivalents} / ${ev.farm_days}d</b></div>
+      <div><span>Balances on the day would pay</span><b>$${ev.slice_snapshot_usd.toFixed(2)}</b></div>
+      <div><span>Fees (8 transactions)</span><b>$${ev.fees_usd.toFixed(2)}</b></div>
+      <div><span>− T-bill forgone ${ev.tbill_rate * 100}%, ${ev.farm_days}d</span><b>$${ev.tbill_usd.toFixed(2)}</b></div>
+      <div><span>Total cost</span><b>$${ev.total_cost_usd.toFixed(2)}</b></div>
+      <div><span>Time</span><b>${ev.hours} hours</b></div>
+      <div class="total"><span>Net · $/hour</span><b>$${ev.net_usd.toFixed(2)} · $${ev.per_hour_usd.toFixed(2)}/h · ${ev.verdict}</b></div>
+      <div><span>Break-even launch odds</span><b>${beText(ev.breakeven_odds)}</b></div>
+      <div><span>Pays from</span><b>${ev.pays_from_usd === null ? 'no ticket pays' : '$' + ev.pays_from_usd.toLocaleString('en-US') + ' ticket'}</b></div>
+    </div>
+    <p>Verdict: FARM when the slice covers the total cost twice over, THIN when it merely covers it, else SKIP. The slice is dollar-days, not pro-rata: a ${ev.farm_days}-day hold earns ${ev.day_equivalents} day-equivalents against the protocol's lifetime dollar-days.</p>
+  </section>
+  <section class="detail-section"><h3>Farm plan — ${steps.length} steps</h3>
+    <ol class="steps">${steps.map((st) => `<li><b>${esc(st.text)}</b><span class="cost">Cost: ${esc(st.cost)} · Time: ${esc(st.time)}</span></li>`).join('')}</ol>
+    <p>Each step carries its when, cost and time. Step 6 is the stop rule; step 7 is the exit. The plan is the one the board file carries for this protocol.</p>
+  </section>
   <section class="detail-section"><h3>Why it ranks #${row.rank}</h3>
     <div class="equation">
       <div><span>TVL</span><b>${moneyExact(row.tvl_usd)}</b></div>
       <div><span>Fitted curve at this TVL (${row.multiple.toFixed(2)}×, incl. family effect ×${(10 ** row.family_effect).toFixed(2)})</span><b>${moneyExact(Math.round(row.tvl_usd * row.multiple))}</b></div>
       <div><span>Growth (7d ${changeText(row.change_7d)})</span><b>× ${row.growth_multiplier.toFixed(3)}</b></div>
       <div><span>Maturity (${ageText(row.age_days)})</span><b>× ${row.maturity_multiplier.toFixed(3)}</b></div>
-      <div><span>Chain spread (${row.chains.length} chain${row.chains.length === 1 ? '' : 's'}, none in radar-3)</span><b>× ${row.chain_multiplier.toFixed(3)}</b></div>
+      <div><span>Chain spread (${row.chains.length} chain${row.chains.length === 1 ? '' : 's'}, not modelled)</span><b>× ${row.chain_multiplier.toFixed(3)}</b></div>
       <div class="total"><span>Implied value</span><b>${moneyExact(row.implied_value_usd)}</b></div>
       <div><span>P25–P75 band</span><b>${moneyExact(b.p25)} – ${moneyExact(b.p75)}</b></div>
     </div>
     <p>${esc(row.name)} ranks #${row.rank} because it holds ${money(row.tvl_usd)} of TVL in ${esc(row.category || 'an uncategorized')} category, whose fitted curve value at this TVL is ${row.multiple.toFixed(2)}× TVL, and it has been live ${ageText(row.age_days)}. Its 7-day change is ${changeText(row.change_7d)}. The implied value is a model's estimate, not a price, and the launch may never happen.</p>
     ${calib ? `<p>Family effect for ${esc(calib.category)}: ${calib.comparables} comparable${calib.comparables === 1 ? '' : 's'}, median log-residual ${calib.median_residual === null ? '—' : calib.median_residual.toFixed(2)}, shrunk effect ${calib.effect.toFixed(2)} (×${calib.effect_multiplier.toFixed(2)}), shrunk toward 0 where comparables are few.</p>` : ''}
   </section>
-  <section class="detail-section"><h3>Farm economics — $${ev.ticket_usd.toLocaleString('en-US')} ticket</h3>
-    <div class="equation">
-      <div><span>Airdrop slice (10% of implied, pro-rata)</span><b>$${ev.slice_usd.toFixed(2)}</b></div>
-      <div><span>Fees (8 transactions over 90 days)</span><b>$${ev.fees_usd.toFixed(2)}</b></div>
-      <div><span>Time</span><b>${ev.hours} hours</b></div>
-      <div class="total"><span>Net</span><b>$${ev.net_usd.toFixed(2)} · ${ev.verdict}</b></div>
-    </div>
-    <p>Verdict: FARM when the slice covers the fees twice over, THIN when it merely covers them, else SKIP. The slice assumes a launch airdrops 10% of implied value, shared pro-rata by ticket over TVL.</p>
-  </section>
-  ${comps.length ? `<section class="detail-section"><h3>Comparable tokens in ${esc(row.category || 'this category')}</h3><div class="comps">${comps.map((c) => `<div class="comp"><span>${esc(c.name)}</span><b class="num">${c.fdv_tvl === null ? '—' : `${c.fdv_tvl.toFixed(2)}×`} FDV/TVL · ${money(c.tvl_usd)} TVL</b></div>`).join('')}</div></section>` : ''}
-  <section class="detail-section"><h3>Farm plan</h3>
-    <ol class="steps">${steps.map((s) => {
-      const match = s.match(/^(.*?) Cost: (.*?)\. Time: (.*?)\.$/);
-      if (!match) return `<li>${esc(s)}</li>`;
-      return `<li><b>${esc(match[1])}</b><span class="cost">Cost: ${esc(match[2])} · Time: ${esc(match[3])}</span></li>`;
-    }).join('')}</ol>
-    <p>Seven steps, each with a cost and a time. The plan is derived from this protocol's own record — its category, its chain and its TVL — and it is the same plan the board file carries.</p>
-  </section>`;
+  ${comps.length ? `<section class="detail-section"><h3>Comparable tokens in ${esc(row.category || 'this category')}</h3><div class="comps">${comps.map((c) => `<div class="comp"><span>${esc(c.name)}</span><b class="num">${c.fdv_tvl === null ? '—' : `${c.fdv_tvl.toFixed(2)}×`} FDV/TVL · ${money(c.tvl_usd)} TVL</b></div>`).join('')}</div></section>` : ''}`;
   if (!dlg.open) dlg.showModal();
 }
 
@@ -388,6 +379,9 @@ main.addEventListener('change', (e) => {
   if (e.target.id === 'chain') { state.chain = e.target.value; writeHash(); render(); }
   if (e.target.id === 'minTvl') { state.minTvl = e.target.value; writeHash(); render(); }
   if (e.target.id === 'watch') { state.watch = e.target.checked; writeHash(); render(); }
+  if (e.target.id === 'wi-ticket') { wi.ticket = Number(e.target.value); renderDetail(); }
+  if (e.target.id === 'wi-share') { wi.share = Number(e.target.value); renderDetail(); }
+  if (e.target.id === 'wi-tbill') { wi.tbill = Number(e.target.value); renderDetail(); }
 });
 document.addEventListener('click', (e) => {
   const dlg = document.getElementById('detail');
